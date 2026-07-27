@@ -67,9 +67,38 @@ Two constraints that are easy to get wrong:
 - **The data directory must be a mounted volume.** Without `[mounts]`, every redeploy starts
   from an empty database and loses all uploaded files.
 
-> **No authentication.** Anyone who finds the URL can read, edit and delete everything.
-> That's fine for a throwaway/private deployment; add auth before putting anything you'd
-> mind losing behind a public address.
+Set a password and an API key on the deployment:
+
+```bash
+fly secrets set StudyApp__Password=... StudyApp__Anthropic__ApiKey=sk-ant-...
+```
+
+> **Set `StudyApp__Password` on any deployment that has an API key.** Auth is off when no
+> password is configured (so local runs stay frictionless), but an open instance with a key
+> on it lets anyone who finds the URL spend real money on generation runs — not just read
+> your flashcards.
+
+## AI flashcard generation
+
+Two stages, deliberately separated:
+
+1. **Ingest** a material once (Materials tab → *Ingest*). Claude reads the PDF or scan with
+   vision and stores a `MaterialExtract`: the document as markdown with LaTeX preserved,
+   original language intact, figures described, split into sections tagged by page.
+2. **Generate cards** from that extract (→ *Generate cards*). This never re-reads the
+   original file, which is why the first pass is the expensive one and every run after it is
+   cheap and fast.
+
+Generated cards land in the course's **Inbox**, not in a deck. Nothing enters scheduling
+until you accept it; you can edit a card before accepting or reject it outright. Accepted
+cards keep their source material and page reference.
+
+Inspect any extract at *Materials → Ingested*. This matters: if handwriting was misread or a
+formula mangled, every card generated from it inherits the error — fix it by re-running
+extraction rather than patching cards one by one.
+
+Costs are estimated per run and totalled in **Settings** (roughly $0.10–0.40 to ingest an
+assignment, $5–10 for a full textbook, well under $1 for a generation run).
 
 ## Using it
 

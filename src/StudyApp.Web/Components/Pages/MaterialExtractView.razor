@@ -1,0 +1,185 @@
+@page "/materials/{Id:guid}/extract"
+@implements IAsyncDisposable
+@inject MaterialService MaterialService
+@inject AiJobService AiJobService
+@inject AiOptions AiOptions
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — Extract</PageTitle>
+
+@if (_material is null)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="courses">Courses</a></li>
+            <li class="breadcrumb-item"><a href="courses/@_material.CourseId">Course</a></li>
+            <li class="breadcrumb-item active">@_material.Title — extract</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+        <h1 class="mb-0">@_material.Title</h1>
+        <div class="d-flex gap-2">
+            <a class="btn btn-outline-secondary" href="materials/@Id/file" target="_blank">Original file</a>
+            @if (AiOptions.IsConfigured)
+            {
+                <button class="btn btn-outline-primary" disabled="@_busy" @onclick="ReingestAsync">
+                    @(_busy ? "Queued…" : "Re-run extraction")
+                </button>
+            }
+        </div>
+    </div>
+
+    @if (_error is not null)
+    {
+        <div class="alert alert-danger">@_error</div>
+    }
+
+    @if (_material.Extract is not { } extract)
+    {
+        <div class="alert alert-light border">
+            This material hasn't been ingested yet. Ingest it from the course's Materials tab and
+            its extracted text will appear here.
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-light border d-flex flex-wrap gap-4">
+            <span><strong>@extract.PageCount</strong> page@(extract.PageCount == 1 ? "" : "s")</span>
+            <span><strong>@extract.Sections.Count</strong> section@(extract.Sections.Count == 1 ? "" : "s")</span>
+            <span><strong>@extract.Topics.Count</strong> topics</span>
+            <span><strong>@extract.Terms.Count</strong> terms</span>
+            <span class="text-muted">language: @(extract.Language ?? "—")</span>
+            <span class="text-muted">
+                @AiPricing.Format(AiPricing.Estimate(extract.Model, extract.InputTokens, extract.OutputTokens))
+                to produce
+            </span>
+        </div>
+
+        <p class="text-muted small">
+            This text is what card generation reads — the original file is never sent again. If
+            something here is wrong (misread handwriting, mangled formula), fix it at the source
+            by re-running extraction, otherwise every card generated from it inherits the error.
+        </p>
+
+        @if (extract.Topics.Count > 0)
+        {
+            <h2 class="h6 mt-4">Topics</h2>
+            <div class="d-flex flex-wrap gap-1 mb-3">
+                @foreach (var topic in extract.Topics)
+                {
+                    <span class="badge text-bg-secondary" dir="auto">@topic</span>
+                }
+            </div>
+        }
+
+        @if (extract.Terms.Count > 0)
+        {
+            <h2 class="h6">Glossary</h2>
+            <dl class="row small mb-4" dir="auto">
+                @foreach (var term in extract.Terms)
+                {
+                    <dt class="col-sm-3 text-break">@term.Term</dt>
+                    <dd class="col-sm-9 text-break">@term.Definition</dd>
+                }
+            </dl>
+        }
+
+        <h2 class="h6">Extracted text</h2>
+        <div @ref="_extractRef">
+            @* Loop variable is deliberately not named "section" — Razor would parse @section
+               as the section directive and fail to compile. *@
+            @foreach (var part in extract.Sections)
+            {
+                <div class="card mb-2">
+                    <div class="card-header d-flex justify-content-between align-items-center py-1">
+                        <span class="small fw-semibold" dir="auto">@(string.IsNullOrWhiteSpace(part.Title) ? "—" : part.Title)</span>
+                        <span class="badge text-bg-light">p. @part.Page</span>
+                    </div>
+                    <div class="card-body py-2 extract-body" dir="auto">
+                        @((MarkupString)MarkdownRenderer.ToHtml(part.Markdown))
+                    </div>
+                </div>
+            }
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private Material? _material;
+    private bool _busy;
+    private string? _error;
+    private ElementReference _extractRef;
+    private IJSObjectReference? _mathJs;
+
+    protected override async Task OnParametersSetAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _material = await MaterialService.GetWithExtractAsync(Id);
+        if (_material is null)
+            Nav.NavigateTo("courses");
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_mathJs is null)
+        {
+            try
+            {
+                _mathJs = await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                return;
+            }
+        }
+
+        if (_material?.Extract is { Sections.Count: > 0 })
+        {
+            try
+            {
+                await _mathJs.InvokeVoidAsync("renderMath", _extractRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // Element went stale between the guard and the call resolving; harmless.
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+
+    private async Task ReingestAsync()
+    {
+        _busy = true;
+        _error = null;
+        try
+        {
+            await AiJobService.QueueAsync(Id, JobKind.Ingest);
+            Nav.NavigateTo($"courses/{_material!.CourseId}");
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+            _busy = false;
+        }
+    }
+}

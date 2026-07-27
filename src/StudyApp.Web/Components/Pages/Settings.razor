@@ -1,0 +1,81 @@
+@page "/settings"
+@inject AiOptions AiOptions
+@inject AiJobService AiJobService
+
+<PageTitle>StudyApp — Settings</PageTitle>
+
+<h1 class="mb-4">Settings</h1>
+
+<div class="card mb-4">
+    <div class="card-header">Anthropic API</div>
+    <div class="card-body">
+        @if (AiOptions.IsConfigured)
+        {
+            <p class="mb-2">
+                <span class="badge text-bg-success">Connected</span>
+                <span class="ms-2 text-muted">Key ending @AiOptions.KeyHint · model <code>@AiOptions.Model</code></span>
+            </p>
+            <p class="text-muted small mb-0">
+                Ingestion and card generation are available from each course's Materials tab.
+            </p>
+        }
+        else
+        {
+            <p class="mb-2"><span class="badge text-bg-secondary">Not configured</span></p>
+            <p>AI ingestion and card generation are disabled until an API key is set.</p>
+            <p class="mb-1"><strong>Locally</strong> — set an environment variable and restart:</p>
+            <pre class="bg-body-tertiary border rounded p-2 small mb-3"><code>setx StudyApp__Anthropic__ApiKey "sk-ant-..."</code></pre>
+            <p class="mb-1"><strong>On Fly.io</strong>:</p>
+            <pre class="bg-body-tertiary border rounded p-2 small mb-0"><code>fly secrets set StudyApp__Anthropic__ApiKey=sk-ant-...</code></pre>
+        }
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">Spend to date</div>
+    <div class="card-body">
+        @if (_spend is null)
+        {
+            <p class="text-muted mb-0"><em>Loading…</em></p>
+        }
+        else if (_spend.JobCount == 0)
+        {
+            <p class="text-muted mb-0">No AI runs yet.</p>
+        }
+        else
+        {
+            <div class="d-flex gap-4 flex-wrap">
+                <div>
+                    <div class="fs-4">@AiPricing.Format(_spend.Usd)</div>
+                    <div class="text-muted small">estimated total</div>
+                </div>
+                <div>
+                    <div class="fs-4">@_spend.JobCount</div>
+                    <div class="text-muted small">run@(_spend.JobCount == 1 ? "" : "s")</div>
+                </div>
+                <div>
+                    <div class="fs-4">@_spend.InputTokens.ToString("N0")</div>
+                    <div class="text-muted small">input tokens</div>
+                </div>
+                <div>
+                    <div class="fs-4">@_spend.OutputTokens.ToString("N0")</div>
+                    <div class="text-muted small">output tokens</div>
+                </div>
+            </div>
+            <p class="text-muted small mt-3 mb-0">
+                Estimated from published per-token rates — your Anthropic console is authoritative.
+            </p>
+        }
+    </div>
+</div>
+
+<div class="alert alert-warning">
+    <strong>This app has no login.</strong> Anyone who can reach it can start generation runs,
+    which spend real money on the key above. Add authentication before exposing it publicly.
+</div>
+
+@code {
+    private CourseSpend? _spend;
+
+    protected override async Task OnInitializedAsync() => _spend = await AiJobService.GetSpendAsync();
+}

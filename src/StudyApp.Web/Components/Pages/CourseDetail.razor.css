@@ -9,3 +9,13 @@
     max-width: 50rem;
     overflow-x: auto;
 }
+
+/* ::deep — suggestion HTML arrives as a MarkupString and so never carries this
+   component's scope attribute. */
+.suggestion-body ::deep p:last-child {
+    margin-bottom: 0;
+}
+
+.suggestion-body ::deep .katex-display {
+    margin: 0.3rem 0;
+}

@@ -4,6 +4,9 @@
 @inject DeckService DeckService
 @inject CourseUnitService UnitService
 @inject MaterialService MaterialService
+@inject AiOptions AiOptions
+@inject AiJobService AiJobService
+@inject SuggestionService SuggestionService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
@@ -52,6 +55,15 @@ else
         <li class="nav-item">
             <button class="nav-link @(_activeTab == "materials" ? "active" : "")" @onclick=@(() => _activeTab = "materials")>
                 Materials
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "inbox" ? "active" : "")" @onclick=@(() => _activeTab = "inbox")>
+                Inbox
+                @if (_suggestions.Count > 0)
+                {
+                    <span class="badge text-bg-danger ms-1">@_suggestions.Count</span>
+                }
             </button>
         </li>
         <li class="nav-item">
@@ -253,6 +265,59 @@ else
             </div>
         </div>
 
+        @if (!AiOptions.IsConfigured)
+        {
+            <div class="alert alert-light border">
+                AI ingestion and card generation are off — no Anthropic API key is configured.
+                Set one up in <a href="settings">Settings</a>.
+            </div>
+        }
+
+        @if (_jobError is not null)
+        {
+            <div class="alert alert-danger">@_jobError</div>
+        }
+
+        @if (_jobs.Count > 0)
+        {
+            <div class="card mb-3">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <span>AI runs</span>
+                    <span class="text-muted small">
+                        @AiPricing.Format(_spend?.Usd ?? 0) spent on this course
+                    </span>
+                </div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var job in _jobs)
+                    {
+                        <li class="list-group-item d-flex justify-content-between align-items-start flex-wrap gap-2">
+                            <span>
+                                <span class="badge @JobBadge(job.Status) me-1">@job.Status</span>
+                                <span class="fw-semibold">@(job.Kind == JobKind.Ingest ? "Ingest" : "Generate cards")</span>
+                                <span class="text-muted small">— @(job.Material?.Title ?? "—")</span>
+                                @if (job.Message is { Length: > 0 })
+                                {
+                                    <div class="small @(job.Status == JobStatus.Failed ? "text-danger" : "text-muted")">
+                                        @job.Message
+                                    </div>
+                                }
+                            </span>
+                            <span class="text-muted small text-nowrap">
+                                @AiPricing.Format(AiPricing.Estimate(job.Model, job.InputTokens, job.OutputTokens))
+                            </span>
+                        </li>
+                    }
+                </ul>
+            </div>
+            @if (_hasActiveJobs)
+            {
+                <p class="text-muted small">
+                    A run is in progress — it keeps going if you navigate away.
+                    <button class="btn btn-sm btn-link p-0 align-baseline" @onclick="ReloadAsync">Refresh</button>
+                </p>
+            }
+        }
+
         @if (_materials.Count == 0)
         {
             <p class="text-muted">No materials uploaded yet.</p>
@@ -268,6 +333,7 @@ else
                             <th>Unit</th>
                             <th>Size</th>
                             <th>Due</th>
+                            <th>AI</th>
                             <th></th>
                         </tr>
                     </thead>
@@ -281,13 +347,142 @@ else
                                 <td class="small text-nowrap">@FormatSize(m.SizeBytes)</td>
                                 <td class="small text-nowrap">@(m.DueDate is { } d ? d.ToString("yyyy-MM-dd") : "—")</td>
                                 <td class="text-nowrap">
-                                    <a class="btn btn-sm btn-outline-primary" href="materials/@m.Id/file" target="_blank">View</a>
+                                    @switch (m.Status)
+                                    {
+                                        case MaterialStatus.Ingested:
+                                            <a class="badge text-bg-success text-decoration-none"
+                                               href="materials/@m.Id/extract">Ingested</a>
+                                            break;
+                                        case MaterialStatus.Failed:
+                                            <span class="badge text-bg-danger">Failed</span>
+                                            break;
+                                        default:
+                                            <span class="badge text-bg-light border">Not ingested</span>
+                                            break;
+                                    }
+                                </td>
+                                <td class="text-nowrap">
+                                    @if (AiOptions.IsConfigured)
+                                    {
+                                        @if (m.Status == MaterialStatus.Ingested)
+                                        {
+                                            <button class="btn btn-sm btn-primary me-1"
+                                                    @onclick="() => QueueAsync(m.Id, JobKind.GenerateCards)">
+                                                ✨ Generate cards
+                                            </button>
+                                        }
+                                        else
+                                        {
+                                            <button class="btn btn-sm btn-outline-primary me-1"
+                                                    @onclick="() => QueueAsync(m.Id, JobKind.Ingest)">
+                                                Ingest
+                                            </button>
+                                        }
+                                    }
+                                    <a class="btn btn-sm btn-outline-secondary me-1" href="materials/@m.Id/file" target="_blank">File</a>
                                     <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteMaterialAsync(m.Id)">✕</button>
                                 </td>
                             </tr>
                         }
                     </tbody>
                 </table>
+            </div>
+        }
+    }
+    else if (_activeTab == "inbox")
+    {
+        @if (_suggestions.Count == 0)
+        {
+            <p class="text-muted">
+                Nothing waiting for review. Generated cards land here before they enter a deck —
+                nothing the AI writes is scheduled until you approve it.
+            </p>
+        }
+        else
+        {
+            <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+                <div>
+                    <label class="form-label mb-0 small">Accept into deck</label>
+                    <select class="form-select" @bind="_inboxDeckId">
+                        <option value="">— choose a deck —</option>
+                        @foreach (var deck in _deckStats)
+                        {
+                            <option value="@deck.DeckId">@deck.Name</option>
+                        }
+                    </select>
+                </div>
+                <button class="btn btn-success" disabled="@(_inboxDeckId is null)"
+                        @onclick="AcceptAllAsync">
+                    Accept all @_suggestions.Count
+                </button>
+            </div>
+
+            @if (_inboxError is not null)
+            {
+                <div class="alert alert-danger">@_inboxError</div>
+            }
+
+            <div @ref="_inboxRef">
+                @foreach (var suggestion in _suggestions)
+                {
+                    <div class="card mb-2">
+                        <div class="card-body">
+                            @if (_editingSuggestionId == suggestion.Id)
+                            {
+                                <textarea class="form-control mb-2" rows="2" @bind="_editSuggestionFront"></textarea>
+                                <textarea class="form-control mb-2" rows="3" @bind="_editSuggestionBack"></textarea>
+                                <button class="btn btn-sm btn-success me-1" disabled="@(_inboxDeckId is null)"
+                                        @onclick="() => AcceptAsync(suggestion.Id, true)">
+                                    Save &amp; accept
+                                </button>
+                                <button class="btn btn-sm btn-secondary" @onclick="() => _editingSuggestionId = null">
+                                    Cancel
+                                </button>
+                            }
+                            else
+                            {
+                                <div class="fw-semibold suggestion-body" dir="auto">
+                                    @((MarkupString)MarkdownRenderer.ToHtml(suggestion.Front))
+                                </div>
+                                <hr class="my-2" />
+                                <div class="text-muted suggestion-body" dir="auto">
+                                    @((MarkupString)MarkdownRenderer.ToHtml(suggestion.Back))
+                                </div>
+
+                                <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mt-2">
+                                    <span class="small text-muted">
+                                        @if (suggestion.SourceMaterial is { } src)
+                                        {
+                                            <span>@src.Title</span>
+                                        }
+                                        @if (suggestion.SourceReference is { Length: > 0 } reference)
+                                        {
+                                            <span class="badge text-bg-light border ms-1">@reference</span>
+                                        }
+                                        @if (suggestion.Rationale is { Length: > 0 } why)
+                                        {
+                                            <span class="ms-1 fst-italic">— @why</span>
+                                        }
+                                    </span>
+                                    <span class="text-nowrap">
+                                        <button class="btn btn-sm btn-success me-1" disabled="@(_inboxDeckId is null)"
+                                                @onclick="() => AcceptAsync(suggestion.Id, false)">
+                                            ✓ Accept
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-secondary me-1"
+                                                @onclick="() => StartSuggestionEdit(suggestion)">
+                                            ✏ Edit
+                                        </button>
+                                        <button class="btn btn-sm btn-outline-danger"
+                                                @onclick="() => RejectAsync(suggestion.Id)">
+                                            ✕ Reject
+                                        </button>
+                                    </span>
+                                </div>
+                            }
+                        </div>
+                    </div>
+                }
             </div>
         }
     }
@@ -349,6 +544,19 @@ else
     private bool _uploading;
     private string? _uploadError;
 
+    private List<GenerationJob> _jobs = [];
+    private CourseSpend? _spend;
+    private bool _hasActiveJobs;
+    private string? _jobError;
+
+    private List<CardSuggestion> _suggestions = [];
+    private Guid? _inboxDeckId;
+    private Guid? _editingSuggestionId;
+    private string _editSuggestionFront = "";
+    private string _editSuggestionBack = "";
+    private string? _inboxError;
+    private ElementReference _inboxRef;
+
     protected override async Task OnParametersSetAsync() => await ReloadAsync();
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -366,11 +574,15 @@ else
         }
 
         var notesVisible = _activeTab == "notes" && !_editingNotes && !string.IsNullOrWhiteSpace(_course?.NotesMarkdown);
-        if (notesVisible)
+        var inboxVisible = _activeTab == "inbox" && _suggestions.Count > 0;
+
+        // Suggested cards carry LaTeX just like real ones, so the inbox needs the same pass.
+        var target = notesVisible ? _notesRef : inboxVisible ? _inboxRef : (ElementReference?)null;
+        if (target is { } element)
         {
             try
             {
-                await _mathJs.InvokeVoidAsync("renderMath", _notesRef);
+                await _mathJs.InvokeVoidAsync("renderMath", element);
             }
             catch (Exception ex) when (ex is JSDisconnectedException or JSException)
             {
@@ -408,6 +620,85 @@ else
         foreach (var chapter in _chapters)
             _newLessonTitles.TryAdd(chapter.Id, "");
         _materials = await MaterialService.GetAllAsync(Id);
+        _jobs = await AiJobService.GetRecentAsync(Id);
+        _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
+        _spend = await AiJobService.GetSpendAsync(Id);
+        _suggestions = await SuggestionService.GetPendingAsync(Id);
+        _inboxDeckId ??= _deckStats.FirstOrDefault()?.DeckId;
+    }
+
+    // --- AI ---
+
+    private static string JobBadge(JobStatus status) => status switch
+    {
+        JobStatus.Succeeded => "text-bg-success",
+        JobStatus.Failed => "text-bg-danger",
+        JobStatus.Running => "text-bg-primary",
+        _ => "text-bg-secondary",
+    };
+
+    private async Task QueueAsync(Guid materialId, JobKind kind)
+    {
+        _jobError = null;
+        try
+        {
+            await AiJobService.QueueAsync(materialId, kind);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    private void StartSuggestionEdit(CardSuggestion suggestion)
+    {
+        _editingSuggestionId = suggestion.Id;
+        _editSuggestionFront = suggestion.Front;
+        _editSuggestionBack = suggestion.Back;
+    }
+
+    private async Task AcceptAsync(Guid suggestionId, bool withEdits)
+    {
+        if (_inboxDeckId is not { } deckId)
+            return;
+        _inboxError = null;
+        try
+        {
+            await SuggestionService.AcceptAsync(
+                suggestionId, deckId,
+                withEdits ? _editSuggestionFront : null,
+                withEdits ? _editSuggestionBack : null);
+            _editingSuggestionId = null;
+        }
+        catch (Exception ex)
+        {
+            _inboxError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    private async Task RejectAsync(Guid suggestionId)
+    {
+        await SuggestionService.RejectAsync(suggestionId);
+        await ReloadAsync();
+    }
+
+    private async Task AcceptAllAsync()
+    {
+        if (_inboxDeckId is not { } deckId)
+            return;
+        _inboxError = null;
+        try
+        {
+            foreach (var batchId in _suggestions.Select(s => s.BatchId).Distinct().ToList())
+                await SuggestionService.AcceptBatchAsync(batchId, deckId);
+        }
+        catch (Exception ex)
+        {
+            _inboxError = ex.Message;
+        }
+        await ReloadAsync();
     }
 
     private void StartHeaderEdit()

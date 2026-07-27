@@ -1,0 +1,13 @@
+/* ::deep — the extract HTML comes in via MarkupString, so it never gets this
+   component's scope attribute. */
+.extract-body ::deep p:last-child {
+    margin-bottom: 0;
+}
+
+.extract-body ::deep .katex-display {
+    margin: 0.4rem 0;
+}
+
+.extract-body ::deep img {
+    max-width: 100%;
+}

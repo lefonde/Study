@@ -24,6 +24,16 @@ public class MaterialService(IDbContextFactory<StudyDbContext> factory, Material
             .FirstOrDefaultAsync(m => m.Id == id);
     }
 
+    /// <summary>The material with its extract loaded, for the extract viewer.</summary>
+    public async Task<Material?> GetWithExtractAsync(Guid id)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        return await db.Materials.AsNoTracking()
+            .Include(m => m.Unit)
+            .Include(m => m.Extract)
+            .FirstOrDefaultAsync(m => m.Id == id);
+    }
+
     public async Task<Material> UploadAsync(
         Guid courseId, string fileName, string mimeType, Stream content,
         MaterialKind kind, Guid? unitId, DateTime? dueDate)

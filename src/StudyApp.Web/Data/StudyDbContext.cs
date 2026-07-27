@@ -11,6 +11,9 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<ReviewLog> ReviewLogs => Set<ReviewLog>();
     public DbSet<CourseUnit> CourseUnits => Set<CourseUnit>();
     public DbSet<Material> Materials => Set<Material>();
+    public DbSet<MaterialExtract> MaterialExtracts => Set<MaterialExtract>();
+    public DbSet<CardSuggestion> CardSuggestions => Set<CardSuggestion>();
+    public DbSet<GenerationJob> GenerationJobs => Set<GenerationJob>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -19,6 +22,9 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         modelBuilder.Entity<Card>().HasQueryFilter(c => !c.IsDeleted);
         modelBuilder.Entity<CourseUnit>().HasQueryFilter(u => !u.IsDeleted);
         modelBuilder.Entity<Material>().HasQueryFilter(m => !m.IsDeleted);
+        modelBuilder.Entity<MaterialExtract>().HasQueryFilter(e => !e.IsDeleted);
+        modelBuilder.Entity<CardSuggestion>().HasQueryFilter(s => !s.IsDeleted);
+        modelBuilder.Entity<GenerationJob>().HasQueryFilter(j => !j.IsDeleted);
 
         modelBuilder.Entity<Deck>()
             .HasOne(d => d.Course)
@@ -82,10 +88,60 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasForeignKey(c => c.SourceMaterialId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // One extract per material, deleted with it — an extract without its source file is
+        // meaningless, and re-ingesting is the way to get a new one.
+        modelBuilder.Entity<MaterialExtract>()
+            .HasOne(e => e.Material)
+            .WithOne(m => m.Extract)
+            .HasForeignKey<MaterialExtract>(e => e.MaterialId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Sections/terms/topics are read and rewritten as a whole, never queried field-by-field,
+        // so JSON columns keep them together instead of spreading them over side tables.
+        modelBuilder.Entity<MaterialExtract>().OwnsMany(e => e.Sections, b => b.ToJson());
+        modelBuilder.Entity<MaterialExtract>().OwnsMany(e => e.Terms, b => b.ToJson());
+        modelBuilder.Entity<MaterialExtract>().PrimitiveCollection(e => e.Topics);
+
+        modelBuilder.Entity<CardSuggestion>()
+            .HasOne(s => s.Course)
+            .WithMany()
+            .HasForeignKey(s => s.CourseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Provenance, not ownership — losing the unit or the source file must not delete a
+        // pending suggestion the user is still reviewing.
+        modelBuilder.Entity<CardSuggestion>()
+            .HasOne(s => s.Unit)
+            .WithMany()
+            .HasForeignKey(s => s.UnitId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<CardSuggestion>()
+            .HasOne(s => s.SourceMaterial)
+            .WithMany()
+            .HasForeignKey(s => s.SourceMaterialId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<GenerationJob>()
+            .HasOne(j => j.Course)
+            .WithMany()
+            .HasForeignKey(j => j.CourseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<GenerationJob>()
+            .HasOne(j => j.Material)
+            .WithMany()
+            .HasForeignKey(j => j.MaterialId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         modelBuilder.Entity<Card>().HasIndex(c => new { c.DeckId, c.Due });
         modelBuilder.Entity<ReviewLog>().HasIndex(r => r.ReviewedAt);
         modelBuilder.Entity<CourseUnit>().HasIndex(u => new { u.CourseId, u.ParentId, u.Order });
         modelBuilder.Entity<Material>().HasIndex(m => new { m.CourseId, m.Kind });
         modelBuilder.Entity<Material>().HasIndex(m => m.DueDate);
+        // The inbox always reads "pending for this course", and batches are acted on together.
+        modelBuilder.Entity<CardSuggestion>().HasIndex(s => new { s.CourseId, s.Status });
+        modelBuilder.Entity<CardSuggestion>().HasIndex(s => s.BatchId);
+        modelBuilder.Entity<GenerationJob>().HasIndex(j => new { j.CourseId, j.Status });
     }
 }

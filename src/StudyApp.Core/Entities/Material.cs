@@ -20,8 +20,9 @@ public enum MaterialStatus
 }
 
 /// <summary>
-/// An uploaded source document (PDF, image, scan). Ingestion (AI extraction) is a later
-/// phase — v0.2 only stores and organizes the raw file.
+/// An uploaded source document (PDF, image, scan). The raw file is read exactly once, by
+/// ingestion, which produces the reusable <see cref="MaterialExtract"/>; everything after
+/// that works from the extract instead.
 /// </summary>
 public class Material : ITimestamped
 {
@@ -40,6 +41,9 @@ public class Material : ITimestamped
     /// <summary>Set only for HomeAssignment materials.</summary>
     public DateTime? DueDate { get; set; }
     public MaterialStatus Status { get; set; } = MaterialStatus.Uploaded;
+
+    /// <summary>The AI-ready form of this file, once ingested. Null until then.</summary>
+    public MaterialExtract? Extract { get; set; }
 
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }

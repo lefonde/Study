@@ -1,6 +1,17 @@
 # Materials & AI Flashcard Generation — Design Plan
 
-Status: **approved direction, not yet built** (planned 2026-07-27). Builds on MVP-0 (review loop, shipped).
+Status: v0.2 and **v0.3 shipped** 2026-07-27; v0.4–v0.5 still planned. Builds on MVP-0 (review loop, shipped).
+
+Two revisions made during the v0.3 build, both superseding what's written below:
+
+- **API key storage.** The plan specified a DPAPI-protected `settings.json`. DPAPI is
+  Windows-only and the app now deploys as a Linux container, so the key comes from
+  configuration instead (`StudyApp__Anthropic__ApiKey`, a Fly secret in production). The
+  Settings page reports key status rather than accepting one, which also keeps the key out of
+  the browser entirely.
+- **Auth moved into v0.3.** Originally deferred, it became a prerequisite the moment a
+  billable API key sat on a public host: an unauthenticated instance lets a stranger spend
+  money, not merely read cards. Enabled by setting `StudyApp__Password`.
 
 ## The mindset this feature serves
 
