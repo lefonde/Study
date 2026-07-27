@@ -400,22 +400,43 @@ else
         }
         else
         {
-            <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
-                <div>
-                    <label class="form-label mb-0 small">Accept into deck</label>
-                    <select class="form-select" @bind="_inboxDeckId">
-                        <option value="">— choose a deck —</option>
-                        @foreach (var deck in _deckStats)
-                        {
-                            <option value="@deck.DeckId">@deck.Name</option>
-                        }
-                    </select>
+            @* Accepting means creating a Card, and cards live in decks — so with no deck there
+               is nowhere for these to go. Say that plainly and offer the fix inline, rather
+               than greying the buttons out and leaving the reason invisible. *@
+            @if (_deckStats.Count == 0)
+            {
+                <div class="alert alert-warning">
+                    <strong>No deck to accept into.</strong>
+                    Approved cards get filed into a deck, and this course doesn't have one yet.
+                    <div class="input-group mt-2" style="max-width: 28rem;">
+                        <input class="form-control" placeholder="Deck name, e.g. Maman 11"
+                               @bind="_inboxNewDeckName" @bind:event="oninput" />
+                        <button class="btn btn-primary"
+                                disabled="@string.IsNullOrWhiteSpace(_inboxNewDeckName)"
+                                @onclick="CreateDeckFromInboxAsync">
+                            Create deck
+                        </button>
+                    </div>
                 </div>
-                <button class="btn btn-success" disabled="@(_inboxDeckId is null)"
-                        @onclick="AcceptAllAsync">
-                    Accept all @_suggestions.Count
-                </button>
-            </div>
+            }
+            else
+            {
+                <div class="d-flex align-items-end gap-2 mb-3 flex-wrap">
+                    <div>
+                        <label class="form-label mb-0 small">Accept into deck</label>
+                        <select class="form-select" @bind="_inboxDeckId">
+                            @foreach (var deck in _deckStats)
+                            {
+                                <option value="@deck.DeckId">@deck.Name</option>
+                            }
+                        </select>
+                    </div>
+                    <button class="btn btn-success" disabled="@(_inboxDeckId is null)"
+                            @onclick="AcceptAllAsync">
+                        Accept all @_suggestions.Count
+                    </button>
+                </div>
+            }
 
             @if (_inboxError is not null)
             {
@@ -466,6 +487,7 @@ else
                                     </span>
                                     <span class="text-nowrap">
                                         <button class="btn btn-sm btn-success me-1" disabled="@(_inboxDeckId is null)"
+                                                title="@(_inboxDeckId is null ? "Create a deck first — accepted cards have to be filed somewhere" : "Accept into the selected deck")"
                                                 @onclick="() => AcceptAsync(suggestion.Id, false)">
                                             ✓ Accept
                                         </button>
@@ -555,6 +577,7 @@ else
     private string _editSuggestionFront = "";
     private string _editSuggestionBack = "";
     private string? _inboxError;
+    private string _inboxNewDeckName = "";
     private ElementReference _inboxRef;
 
     protected override async Task OnParametersSetAsync() => await ReloadAsync();
@@ -648,6 +671,17 @@ else
         {
             _jobError = ex.Message;
         }
+        await ReloadAsync();
+    }
+
+    /// <summary>Creates a deck from inside the inbox, so an empty course isn't a dead end.</summary>
+    private async Task CreateDeckFromInboxAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_inboxNewDeckName))
+            return;
+        var deck = await DeckService.CreateAsync(Id, _inboxNewDeckName);
+        _inboxNewDeckName = "";
+        _inboxDeckId = deck.Id;
         await ReloadAsync();
     }
 
