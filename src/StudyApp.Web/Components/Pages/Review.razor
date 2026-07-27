@@ -1,0 +1,264 @@
+@page "/review"
+@page "/review/course/{CourseId:guid}"
+@page "/review/deck/{DeckId:guid}"
+@implements IAsyncDisposable
+@inject ReviewService ReviewService
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — Review</PageTitle>
+
+@if (_queue is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_queue.Count == 0)
+{
+    <div class="text-center py-5">
+        <p class="display-6">Nothing to review right now 🎉</p>
+        <p class="lead text-muted">Come back when cards are due, or add new ones.</p>
+        <a class="btn btn-primary" href="">Back to Home</a>
+    </div>
+}
+else if (_index >= _queue.Count)
+{
+    <div class="text-center py-5">
+        <p class="display-6">Session complete 🎉</p>
+        <p class="lead">
+            @_reviewCount review@(_reviewCount == 1 ? "" : "s")
+            @if (_againCount > 0)
+            {
+                <span class="text-muted">(@_againCount repeat@(_againCount == 1 ? "" : "s"))</span>
+            }
+        </p>
+        @if (_lastAction is not null)
+        {
+            <button class="btn btn-link" @onclick="UndoAsync">↩ Undo last grade</button>
+        }
+        <div class="mt-2 d-flex justify-content-center gap-2">
+            <a class="btn btn-primary" href="">Back to Home</a>
+            <button class="btn btn-outline-primary" @onclick="StartAnotherAsync">Study more</button>
+        </div>
+    </div>
+}
+else
+{
+    var card = _queue[_index];
+
+    <div class="review-session mx-auto">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <span class="text-muted small">@(_queue.Count - _index) left · @_reviewCount done</span>
+            @if (_lastAction is not null)
+            {
+                <button class="btn btn-sm btn-link text-decoration-none" @onclick="UndoAsync">↩ Undo</button>
+            }
+        </div>
+
+        <div class="card review-card mb-3">
+            <div class="card-body d-flex flex-column justify-content-center" @ref="_cardBodyRef">
+                <div class="card-face text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</div>
+                @if (_revealed)
+                {
+                    <hr />
+                    <div class="card-face card-back text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</div>
+                }
+            </div>
+        </div>
+
+        <div class="review-controls">
+            @if (!_revealed)
+            {
+                <button class="btn btn-primary grade-btn w-100" @onclick="Reveal">
+                    Show answer <span class="text-white-50 small d-none d-md-inline">(Space)</span>
+                </button>
+            }
+            else
+            {
+                <div class="d-flex gap-2">
+                    <button class="btn btn-danger grade-btn" @onclick="() => GradeAsync(ReviewGrade.Again)">
+                        Again <span class="d-none d-md-inline small">(1)</span>
+                    </button>
+                    <button class="btn btn-warning grade-btn" @onclick="() => GradeAsync(ReviewGrade.Hard)">
+                        Hard <span class="d-none d-md-inline small">(2)</span>
+                    </button>
+                    <button class="btn btn-primary grade-btn" @onclick="() => GradeAsync(ReviewGrade.Good)">
+                        Good <span class="d-none d-md-inline small">(3)</span>
+                    </button>
+                    <button class="btn btn-success grade-btn" @onclick="() => GradeAsync(ReviewGrade.Easy)">
+                        Easy <span class="d-none d-md-inline small">(4)</span>
+                    </button>
+                </div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid? CourseId { get; set; }
+    [Parameter] public Guid? DeckId { get; set; }
+
+    private List<Card>? _queue;
+    private int _index;
+    private bool _revealed;
+    private int _reviewCount;
+    private int _againCount;
+    private (Card Card, GradeResult Result, ReviewGrade Grade, bool Requeued, int PrevIndex)? _lastAction;
+
+    private IJSObjectReference? _js;
+    private IJSObjectReference? _mathJs;
+    private DotNetObjectReference<Review>? _selfRef;
+    private ElementReference _cardBodyRef;
+    private bool _grading;
+
+    // Tracks which scope the queue was last built for, since Blazor reuses this component
+    // instance across the three /review routes (they all map here) — without this, navigating
+    // between them (e.g. deck review -> global review via the nav menu) would keep showing the
+    // stale queue from whichever scope loaded first.
+    private bool _initialized;
+    private Guid? _builtCourseId;
+    private Guid? _builtDeckId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (_initialized && _builtCourseId == CourseId && _builtDeckId == DeckId)
+            return;
+        _initialized = true;
+        _builtCourseId = CourseId;
+        _builtDeckId = DeckId;
+        await ResetSessionAsync();
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _selfRef = DotNetObjectReference.Create(this);
+                _js = await JS.InvokeAsync<IJSObjectReference>("import", "/js/review.js");
+                await _js.InvokeVoidAsync("init", _selfRef);
+                _mathJs = await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // Circuit dropped mid-setup; nothing more to do this render.
+                return;
+            }
+        }
+
+        // Re-scan for $...$ math on every render — the card face (and, once
+        // revealed, the back) changes each time; auto-render is a cheap no-op
+        // over text that's already been rendered.
+        if (_mathJs is not null && _queue is { Count: > 0 } && _index < _queue.Count)
+        {
+            try
+            {
+                await _mathJs.InvokeVoidAsync("renderMath", _cardBodyRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // A rapid grade can advance the render past this element before the
+                // JS call resolves — the element reference goes stale. Harmless;
+                // the next render's call will catch up. Must not bubble: an
+                // unhandled exception here terminates the whole circuit.
+            }
+        }
+    }
+
+    [JSInvokable]
+    public async Task OnKey(string key)
+    {
+        if (_queue is null || _index >= _queue.Count)
+            return;
+
+        if (key == "space")
+        {
+            if (_revealed)
+                await GradeAsync(ReviewGrade.Good);
+            else
+                Reveal();
+        }
+        else if (_revealed && key is "1" or "2" or "3" or "4")
+        {
+            await GradeAsync((ReviewGrade)(int.Parse(key) - 1));
+        }
+        StateHasChanged();
+    }
+
+    private void Reveal() => _revealed = true;
+
+    private async Task GradeAsync(ReviewGrade grade)
+    {
+        if (_grading || _queue is null)
+            return;
+        _grading = true;
+        try
+        {
+            var card = _queue[_index];
+            var result = await ReviewService.GradeAsync(card, grade);
+
+            // Cards still in learning (Again, or Hard while learning) come back later this session.
+            var requeued = card.State == CardState.Learning;
+            if (requeued)
+                _queue.Add(card);
+            if (grade == ReviewGrade.Again)
+                _againCount++;
+
+            _lastAction = (card, result, grade, requeued, _index);
+            _reviewCount++;
+            _index++;
+            _revealed = false;
+        }
+        finally
+        {
+            _grading = false;
+        }
+    }
+
+    private async Task UndoAsync()
+    {
+        if (_lastAction is not { } last || _queue is null)
+            return;
+
+        await ReviewService.UndoAsync(last.Card, last.Result);
+        if (last.Requeued)
+            _queue.RemoveAt(_queue.Count - 1);
+
+        _index = last.PrevIndex;
+        _revealed = true; // the answer had already been seen
+        _reviewCount--;
+        if (last.Grade == ReviewGrade.Again)
+            _againCount--;
+        _lastAction = null;
+    }
+
+    private async Task StartAnotherAsync() => await ResetSessionAsync();
+
+    private async Task ResetSessionAsync()
+    {
+        _queue = await ReviewService.BuildSessionAsync(CourseId, DeckId);
+        _index = 0;
+        _revealed = false;
+        _reviewCount = 0;
+        _againCount = 0;
+        _lastAction = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_js is not null)
+            {
+                await _js.InvokeVoidAsync("dispose");
+                await _js.DisposeAsync();
+            }
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit already gone; nothing to clean up client-side.
+        }
+        _selfRef?.Dispose();
+    }
+}

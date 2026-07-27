@@ -1,0 +1,90 @@
+@page "/courses"
+@inject CourseService CourseService
+
+<PageTitle>StudyApp — Courses</PageTitle>
+
+<h1 class="mb-4">Courses</h1>
+
+<div class="card mb-4">
+    <div class="card-body">
+        <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-6">
+                <label class="form-label" for="new-course-name">New course</label>
+                <input id="new-course-name" class="form-control" placeholder="e.g. Linear Algebra"
+                       @bind="_newName" @bind:event="oninput" />
+            </div>
+            <div class="col-auto">
+                <label class="form-label" for="new-course-color">Color</label>
+                <input id="new-course-color" type="color" class="form-control form-control-color" @bind="_newColor" />
+            </div>
+            <div class="col-auto">
+                <button class="btn btn-primary" disabled="@string.IsNullOrWhiteSpace(_newName)" @onclick="CreateAsync">
+                    Add course
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+@if (_courses is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_courses.Count == 0)
+{
+    <p class="text-muted">No courses yet — add your first one above.</p>
+}
+else
+{
+    <div class="list-group">
+        @foreach (var course in _courses)
+        {
+            <div class="list-group-item d-flex align-items-center justify-content-between">
+                <a href="courses/@course.Id" class="text-decoration-none d-flex align-items-center gap-2">
+                    <span class="course-dot" style="background:@course.Color"></span>
+                    <span class="fw-semibold">@course.Name</span>
+                    <span class="text-muted small">· @course.Decks.Count deck@(course.Decks.Count == 1 ? "" : "s")</span>
+                </a>
+                @if (_confirmDeleteId == course.Id)
+                {
+                    <span>
+                        <span class="me-2 text-danger">Delete course and all its cards?</span>
+                        <button class="btn btn-sm btn-danger" @onclick="() => DeleteAsync(course.Id)">Delete</button>
+                        <button class="btn btn-sm btn-secondary" @onclick="() => _confirmDeleteId = null">Cancel</button>
+                    </span>
+                }
+                else
+                {
+                    <button class="btn btn-sm btn-outline-danger" @onclick="() => _confirmDeleteId = course.Id">✕</button>
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private List<Course>? _courses;
+    private string _newName = "";
+    private string _newColor = "#4f6df5";
+    private Guid? _confirmDeleteId;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync() => _courses = await CourseService.GetAllAsync();
+
+    private async Task CreateAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newName))
+            return;
+        await CourseService.CreateAsync(_newName, _newColor);
+        _newName = "";
+        await ReloadAsync();
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        await CourseService.SoftDeleteAsync(id);
+        _confirmDeleteId = null;
+        await ReloadAsync();
+    }
+}

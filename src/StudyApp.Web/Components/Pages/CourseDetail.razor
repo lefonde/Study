@@ -1,0 +1,562 @@
+@page "/courses/{Id:guid}"
+@implements IAsyncDisposable
+@inject CourseService CourseService
+@inject DeckService DeckService
+@inject CourseUnitService UnitService
+@inject MaterialService MaterialService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — @(_course?.Name ?? "Course")</PageTitle>
+
+@if (_course is null)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="courses">Courses</a></li>
+            <li class="breadcrumb-item active">@_course.Name</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+        @if (_editingHeader)
+        {
+            <input type="color" class="form-control form-control-color" @bind="_editColor" />
+            <input class="form-control w-auto" @bind="_editName" />
+            <button class="btn btn-sm btn-primary" @onclick="SaveHeaderAsync">Save</button>
+            <button class="btn btn-sm btn-secondary" @onclick="() => _editingHeader = false">Cancel</button>
+        }
+        else
+        {
+            <span class="course-dot" style="background:@_course.Color"></span>
+            <h1 class="mb-0 me-2">@_course.Name</h1>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="StartHeaderEdit">✏ Edit</button>
+        }
+    </div>
+
+    <ul class="nav nav-tabs mb-3">
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "decks" ? "active" : "")" @onclick=@(() => _activeTab = "decks")>
+                Decks
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "structure" ? "active" : "")" @onclick=@(() => _activeTab = "structure")>
+                Structure
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "materials" ? "active" : "")" @onclick=@(() => _activeTab = "materials")>
+                Materials
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "notes" ? "active" : "")" @onclick=@(() => _activeTab = "notes")>
+                Notes
+            </button>
+        </li>
+    </ul>
+
+    @if (_activeTab == "decks")
+    {
+        <div class="input-group mb-3" style="max-width: 30rem;">
+            <input class="form-control" placeholder="New deck name, e.g. Chapter 3"
+                   @bind="_newDeckName" @bind:event="oninput" />
+            <button class="btn btn-primary" disabled="@string.IsNullOrWhiteSpace(_newDeckName)" @onclick="CreateDeckAsync">
+                Add deck
+            </button>
+        </div>
+
+        @if (_deckStats.Count == 0)
+        {
+            <p class="text-muted">No decks yet — create one above, then paste cards into it.</p>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var deck in _deckStats)
+                {
+                    <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <a href="decks/@deck.DeckId" class="fw-semibold text-decoration-none">@deck.Name</a>
+                        <div class="d-flex align-items-center gap-3">
+                            <span class="text-muted small">@deck.Total card@(deck.Total == 1 ? "" : "s")</span>
+                            @if (deck.Due > 0)
+                            {
+                                <span class="badge text-bg-danger">@deck.Due due</span>
+                            }
+                            @if (deck.New > 0)
+                            {
+                                <span class="badge text-bg-primary">@deck.New new</span>
+                            }
+                            @if (deck.Due + deck.New > 0)
+                            {
+                                <a class="btn btn-sm btn-outline-primary" href="review/deck/@deck.DeckId">Review</a>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else if (_activeTab == "structure")
+    {
+        <div class="alert alert-light border d-flex align-items-center justify-content-between mb-3">
+            <span>
+                <strong>Currently studying:</strong>
+                @(_course.CurrentUnitId is { } cur ? UnitPath(cur) : "Not set — pick a chapter or lesson below")
+            </span>
+            @if (_course.CurrentUnitId is not null)
+            {
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ClearPositionAsync">Clear</button>
+            }
+        </div>
+
+        <div class="input-group mb-3" style="max-width: 30rem;">
+            <input class="form-control" placeholder="New chapter title" @bind="_newChapterTitle" @bind:event="oninput" />
+            <button class="btn btn-primary" disabled="@string.IsNullOrWhiteSpace(_newChapterTitle)" @onclick="AddChapterAsync">
+                Add chapter
+            </button>
+        </div>
+
+        @if (_chapters.Count == 0)
+        {
+            <p class="text-muted">No chapters yet — add your syllabus structure above.</p>
+        }
+        else
+        {
+            <div class="list-group">
+                @foreach (var chapter in _chapters)
+                {
+                    <div class="list-group-item">
+                        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                            @if (_renamingUnitId == chapter.Id)
+                            {
+                                <input class="form-control w-auto" @bind="_renameDraft" @bind:event="oninput" />
+                                <div class="d-flex gap-1">
+                                    <button class="btn btn-sm btn-primary" @onclick="SaveRenameAsync">Save</button>
+                                    <button class="btn btn-sm btn-secondary" @onclick="() => _renamingUnitId = null">Cancel</button>
+                                </div>
+                            }
+                            else
+                            {
+                                <span class="fw-semibold">
+                                    @chapter.Title
+                                    @if (_course.CurrentUnitId == chapter.Id)
+                                    {
+                                        <span class="badge text-bg-success ms-1">you are here</span>
+                                    }
+                                </span>
+                                <div class="d-flex gap-1">
+                                    <button class="btn btn-sm btn-outline-primary" @onclick="() => SetPositionAsync(chapter.Id)">Set as position</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartRename(chapter)">✏</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteUnitAsync(chapter.Id)">✕</button>
+                                </div>
+                            }
+                        </div>
+
+                        <ul class="list-unstyled ms-4 mt-2 mb-2">
+                            @foreach (var lesson in ChildrenOf(chapter.Id))
+                            {
+                                <li class="d-flex align-items-center justify-content-between flex-wrap gap-2 py-1 border-top">
+                                    @if (_renamingUnitId == lesson.Id)
+                                    {
+                                        <input class="form-control w-auto" @bind="_renameDraft" @bind:event="oninput" />
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-sm btn-primary" @onclick="SaveRenameAsync">Save</button>
+                                            <button class="btn btn-sm btn-secondary" @onclick="() => _renamingUnitId = null">Cancel</button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span>
+                                            @lesson.Title
+                                            @if (_course.CurrentUnitId == lesson.Id)
+                                            {
+                                                <span class="badge text-bg-success ms-1">you are here</span>
+                                            }
+                                        </span>
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-sm btn-outline-primary" @onclick="() => SetPositionAsync(lesson.Id)">Set as position</button>
+                                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartRename(lesson)">✏</button>
+                                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteUnitAsync(lesson.Id)">✕</button>
+                                        </div>
+                                    }
+                                </li>
+                            }
+                        </ul>
+
+                        <div class="input-group ms-4" style="max-width: 26rem;">
+                            <input class="form-control form-control-sm" placeholder="New lesson title"
+                                   @bind="_newLessonTitles[chapter.Id]" @bind:event="oninput" />
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => AddLessonAsync(chapter.Id)">
+                                Add lesson
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
+    else if (_activeTab == "materials")
+    {
+        <div class="card mb-3">
+            <div class="card-header">Upload material</div>
+            <div class="card-body">
+                <div class="row g-2 align-items-end">
+                    <div class="col-12 col-md-4">
+                        <label class="form-label">File</label>
+                        <InputFile class="form-control" OnChange="OnFileSelected" />
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Kind</label>
+                        <select class="form-select" @bind="_uploadKind">
+                            @foreach (var kind in Enum.GetValues<MaterialKind>())
+                            {
+                                <option value="@kind">@kind</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <label class="form-label">Unit (optional)</label>
+                        <select class="form-select" @bind="_uploadUnitId">
+                            <option value="">— none —</option>
+                            @foreach (var u in _allUnits)
+                            {
+                                <option value="@u.Id">@UnitPath(u.Id)</option>
+                            }
+                        </select>
+                    </div>
+                    @if (_uploadKind == MaterialKind.HomeAssignment)
+                    {
+                        <div class="col-6 col-md-2">
+                            <label class="form-label">Due date</label>
+                            <input type="date" class="form-control" @bind="_uploadDueDate" />
+                        </div>
+                    }
+                </div>
+                @if (_selectedFile is not null)
+                {
+                    <div class="mt-2">
+                        <button class="btn btn-primary" disabled="@_uploading" @onclick="UploadAsync">
+                            @(_uploading ? "Uploading…" : $"Upload {_selectedFile.Name}")
+                        </button>
+                    </div>
+                }
+                @if (_uploadError is not null)
+                {
+                    <div class="alert alert-danger mt-2 mb-0">@_uploadError</div>
+                }
+            </div>
+        </div>
+
+        @if (_materials.Count == 0)
+        {
+            <p class="text-muted">No materials uploaded yet.</p>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Title</th>
+                            <th>Kind</th>
+                            <th>Unit</th>
+                            <th>Size</th>
+                            <th>Due</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var m in _materials)
+                        {
+                            <tr>
+                                <td class="text-break">@m.Title</td>
+                                <td><span class="badge text-bg-secondary">@m.Kind</span></td>
+                                <td class="small text-muted">@(m.UnitId is { } uid ? UnitPath(uid) : "—")</td>
+                                <td class="small text-nowrap">@FormatSize(m.SizeBytes)</td>
+                                <td class="small text-nowrap">@(m.DueDate is { } d ? d.ToString("yyyy-MM-dd") : "—")</td>
+                                <td class="text-nowrap">
+                                    <a class="btn btn-sm btn-outline-primary" href="materials/@m.Id/file" target="_blank">View</a>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteMaterialAsync(m.Id)">✕</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    }
+    else
+    {
+        @if (_editingNotes)
+        {
+            <textarea class="form-control mb-2 font-monospace" rows="14"
+                      placeholder="Markdown notes for this course…" @bind="_notesDraft"></textarea>
+            <button class="btn btn-primary me-2" @onclick="SaveNotesAsync">Save notes</button>
+            <button class="btn btn-secondary" @onclick="() => _editingNotes = false">Cancel</button>
+        }
+        else
+        {
+            @if (string.IsNullOrWhiteSpace(_course.NotesMarkdown))
+            {
+                <p class="text-muted">No notes yet.</p>
+            }
+            else
+            {
+                <div class="border rounded p-3 mb-2 notes-rendered" dir="auto" @ref="_notesRef">
+                    @((MarkupString)MarkdownRenderer.ToHtml(_course.NotesMarkdown))
+                </div>
+            }
+            <button class="btn btn-outline-primary" @onclick="StartNotesEdit">✏ Edit notes</button>
+        }
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private const long MaxFileSizeBytes = 64 * 1024 * 1024;
+
+    private Course? _course;
+    private List<DeckStats> _deckStats = [];
+    private string _activeTab = "decks";
+    private string _newDeckName = "";
+    private bool _editingHeader;
+    private string _editName = "";
+    private string _editColor = "";
+    private bool _editingNotes;
+    private string _notesDraft = "";
+    private ElementReference _notesRef;
+    private IJSObjectReference? _mathJs;
+
+    private List<CourseUnit> _allUnits = [];
+    private List<CourseUnit> _chapters = [];
+    private string _newChapterTitle = "";
+    private readonly Dictionary<Guid, string> _newLessonTitles = [];
+    private Guid? _renamingUnitId;
+    private string _renameDraft = "";
+
+    private List<Material> _materials = [];
+    private IBrowserFile? _selectedFile;
+    private MaterialKind _uploadKind = MaterialKind.Other;
+    private Guid? _uploadUnitId;
+    private DateTime _uploadDueDate = DateTime.Today.AddDays(7);
+    private bool _uploading;
+    private string? _uploadError;
+
+    protected override async Task OnParametersSetAsync() => await ReloadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_mathJs is null)
+        {
+            try
+            {
+                _mathJs = await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                return;
+            }
+        }
+
+        var notesVisible = _activeTab == "notes" && !_editingNotes && !string.IsNullOrWhiteSpace(_course?.NotesMarkdown);
+        if (notesVisible)
+        {
+            try
+            {
+                await _mathJs.InvokeVoidAsync("renderMath", _notesRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // A tab switch can advance the render past this element before the
+                // JS call resolves — the element reference goes stale. Harmless;
+                // must not bubble, or it terminates the whole circuit.
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit already gone; nothing to clean up client-side.
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _course = await CourseService.GetAsync(Id);
+        if (_course is null)
+        {
+            Nav.NavigateTo("courses");
+            return;
+        }
+        _deckStats = await DeckService.GetStatsForCourseAsync(Id);
+        _allUnits = await UnitService.GetTreeAsync(Id);
+        _chapters = _allUnits.Where(u => u.ParentId is null).OrderBy(u => u.Order).ToList();
+        foreach (var chapter in _chapters)
+            _newLessonTitles.TryAdd(chapter.Id, "");
+        _materials = await MaterialService.GetAllAsync(Id);
+    }
+
+    private void StartHeaderEdit()
+    {
+        _editName = _course!.Name;
+        _editColor = _course.Color;
+        _editingHeader = true;
+    }
+
+    private async Task SaveHeaderAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_editName))
+            return;
+        await CourseService.UpdateAsync(Id, _editName, _editColor);
+        _editingHeader = false;
+        await ReloadAsync();
+    }
+
+    private void StartNotesEdit()
+    {
+        _notesDraft = _course!.NotesMarkdown;
+        _editingNotes = true;
+    }
+
+    private async Task SaveNotesAsync()
+    {
+        await CourseService.SaveNotesAsync(Id, _notesDraft);
+        _editingNotes = false;
+        await ReloadAsync();
+    }
+
+    private async Task CreateDeckAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newDeckName))
+            return;
+        await DeckService.CreateAsync(Id, _newDeckName);
+        _newDeckName = "";
+        await ReloadAsync();
+    }
+
+    // --- Structure ---
+
+    private List<CourseUnit> ChildrenOf(Guid parentId) =>
+        _allUnits.Where(u => u.ParentId == parentId).OrderBy(u => u.Order).ToList();
+
+    private string UnitPath(Guid unitId)
+    {
+        var unit = _allUnits.FirstOrDefault(u => u.Id == unitId);
+        if (unit is null)
+            return "—";
+        return unit.ParentId is { } parentId && _allUnits.FirstOrDefault(u => u.Id == parentId) is { } parent
+            ? $"{parent.Title} > {unit.Title}"
+            : unit.Title;
+    }
+
+    private async Task AddChapterAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_newChapterTitle))
+            return;
+        await UnitService.CreateAsync(Id, null, CourseUnitKind.Chapter, _newChapterTitle);
+        _newChapterTitle = "";
+        await ReloadAsync();
+    }
+
+    private async Task AddLessonAsync(Guid chapterId)
+    {
+        if (!_newLessonTitles.TryGetValue(chapterId, out var title) || string.IsNullOrWhiteSpace(title))
+            return;
+        await UnitService.CreateAsync(Id, chapterId, CourseUnitKind.Lesson, title);
+        _newLessonTitles[chapterId] = "";
+        await ReloadAsync();
+    }
+
+    private void StartRename(CourseUnit unit)
+    {
+        _renamingUnitId = unit.Id;
+        _renameDraft = unit.Title;
+    }
+
+    private async Task SaveRenameAsync()
+    {
+        if (_renamingUnitId is not { } id || string.IsNullOrWhiteSpace(_renameDraft))
+            return;
+        await UnitService.RenameAsync(id, _renameDraft);
+        _renamingUnitId = null;
+        await ReloadAsync();
+    }
+
+    private async Task DeleteUnitAsync(Guid unitId)
+    {
+        await UnitService.DeleteAsync(unitId);
+        await ReloadAsync();
+    }
+
+    private async Task SetPositionAsync(Guid unitId)
+    {
+        await UnitService.SetPositionAsync(Id, unitId);
+        await ReloadAsync();
+    }
+
+    private async Task ClearPositionAsync()
+    {
+        await UnitService.SetPositionAsync(Id, null);
+        await ReloadAsync();
+    }
+
+    // --- Materials ---
+
+    private void OnFileSelected(InputFileChangeEventArgs e)
+    {
+        _selectedFile = e.File;
+        _uploadError = null;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_selectedFile is null)
+            return;
+        _uploading = true;
+        _uploadError = null;
+        try
+        {
+            await using var stream = _selectedFile.OpenReadStream(MaxFileSizeBytes);
+            await MaterialService.UploadAsync(
+                Id, _selectedFile.Name, _selectedFile.ContentType, stream,
+                _uploadKind, _uploadUnitId, _uploadDueDate);
+            _selectedFile = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            _uploadError = $"Upload failed: {ex.Message}";
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private async Task DeleteMaterialAsync(Guid materialId)
+    {
+        await MaterialService.DeleteAsync(materialId);
+        await ReloadAsync();
+    }
+
+    private static string FormatSize(long bytes) => bytes switch
+    {
+        < 1024 => $"{bytes} B",
+        < 1024 * 1024 => $"{bytes / 1024.0:0.#} KB",
+        _ => $"{bytes / (1024.0 * 1024.0):0.#} MB",
+    };
+}

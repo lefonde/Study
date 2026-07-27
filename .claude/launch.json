@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studyapp",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "src/StudyApp.Web", "--no-launch-profile", "--", "--urls", "http://localhost:5170", "--environment", "Development"],
+      "port": 5170
+    }
+  ]
+}

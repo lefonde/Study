@@ -1,0 +1,9 @@
+/* Card fronts/backs render as markdown via MarkupString, so their tags never
+   receive CSS-isolation scoping — ::deep is required to reach them. */
+.card-cell ::deep p:last-child {
+    margin-bottom: 0;
+}
+
+.card-cell ::deep .katex-display {
+    margin: 0.25rem 0;
+}

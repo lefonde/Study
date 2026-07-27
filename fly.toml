@@ -1,0 +1,42 @@
+# Fly.io deployment. Create the app and its volume once, then `fly deploy` to ship.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volumes create studyapp_data --size 1
+#   fly deploy
+#
+# IMPORTANT: this app must run as exactly ONE machine. It uses SQLite on a local volume,
+# and Blazor Server keeps per-user circuit state in memory — a second instance would both
+# corrupt the database and drop sessions on every other request.
+
+app = "studyapp"
+primary_region = "ams"
+
+[build]
+
+[env]
+  ASPNETCORE_URLS = "http://+:8080"
+  StudyApp__DataDirectory = "/data"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Blazor Server holds an open WebSocket per user. Stopping the machine kills every live
+  # circuit mid-session, so keep one always running rather than scaling to zero.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[mounts]
+  source = "studyapp_data"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

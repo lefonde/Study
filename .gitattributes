@@ -1,0 +1,15 @@
+# Normalize to LF in the repository; Windows working copies still check out CRLF.
+# Keeps the Linux container build byte-identical to what's committed.
+* text=auto
+
+# Files that must stay LF even on Windows — a CRLF here breaks the Linux build.
+Dockerfile text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf
+
+# Binary assets: never touch line endings.
+*.png binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary

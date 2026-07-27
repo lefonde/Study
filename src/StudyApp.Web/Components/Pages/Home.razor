@@ -1,0 +1,132 @@
+@page "/"
+@inject ReviewService ReviewService
+@inject MaterialService MaterialService
+
+<PageTitle>StudyApp — Home</PageTitle>
+
+<h1 class="mb-4">Today</h1>
+
+@if (_summary is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_summary.Courses.Count == 0)
+{
+    <div class="text-center py-5">
+        <p class="display-6">Welcome to StudyApp 👋</p>
+        <p class="lead">Create your first course, add a deck, and paste in some flashcards.</p>
+        <a class="btn btn-primary btn-lg" href="courses">Create your first course</a>
+    </div>
+}
+else
+{
+    @if (_summary.HasAnythingToStudy)
+    {
+        <div class="mb-4">
+            <a class="btn btn-primary btn-lg" href="review">
+                ▶ Start review
+                <span class="badge text-bg-light ms-2">@(_summary.TotalDue + _summary.TotalNew)</span>
+            </a>
+        </div>
+    }
+    else
+    {
+        <div class="alert alert-success">
+            🎉 <strong>All caught up!</strong>&nbsp;
+            @if (_summary.TotalDueTomorrow > 0)
+            {
+                <span> @_summary.TotalDueTomorrow card@(_summary.TotalDueTomorrow == 1 ? " is" : "s are") due tomorrow — see you then.</span>
+            }
+            else
+            {
+                <span> Nothing scheduled for tomorrow yet. Add more cards from your <a href="courses">courses</a>.</span>
+            }
+        </div>
+    }
+
+    @if (_upcomingAssignments.Count > 0)
+    {
+        <h2 class="h5 mt-4 mb-2">Upcoming assignments</h2>
+        <div class="list-group mb-4">
+            @foreach (var a in _upcomingAssignments)
+            {
+                <a href="courses/@a.CourseId" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <span>
+                        <span class="fw-semibold">@a.Title</span>
+                        <span class="text-muted small">— @a.Course?.Name</span>
+                    </span>
+                    <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
+                </a>
+            }
+        </div>
+    }
+
+    <div class="list-group">
+        @foreach (var course in _summary.Courses)
+        {
+            <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="course-dot" style="background:@course.Color"></span>
+                    <a href="courses/@course.CourseId" class="fw-semibold text-decoration-none">@course.Name</a>
+                </div>
+                <div class="d-flex align-items-center gap-3">
+                    <span title="Due today">
+                        @if (course.Due > 0)
+                        {
+                            <span class="badge text-bg-danger">@course.Due due</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted small">0 due</span>
+                        }
+                    </span>
+                    <span title="New cards">
+                        @if (course.New > 0)
+                        {
+                            <span class="badge text-bg-primary">@course.New new</span>
+                        }
+                    </span>
+                    <span class="text-muted small" title="Due tomorrow">@course.DueTomorrow tomorrow</span>
+                    @if (course.Total > 0)
+                    {
+                        <a class="btn btn-sm btn-outline-primary" href="review/course/@course.CourseId">Review</a>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private HomeSummary? _summary;
+    private List<Material> _upcomingAssignments = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _summary = await ReviewService.GetHomeSummaryAsync();
+        _upcomingAssignments = await MaterialService.GetUpcomingAssignmentsAsync();
+    }
+
+    private static string DueLabel(DateTime due)
+    {
+        var days = (due.Date - DateTime.Today).Days;
+        return days switch
+        {
+            < 0 => $"{-days}d overdue",
+            0 => "due today",
+            1 => "due tomorrow",
+            _ => $"due in {days}d",
+        };
+    }
+
+    private static string DueBadgeClass(DateTime due)
+    {
+        var days = (due.Date - DateTime.Today).Days;
+        return days switch
+        {
+            <= 0 => "text-bg-danger",
+            <= 3 => "text-bg-warning",
+            _ => "text-bg-secondary",
+        };
+    }
+}

@@ -1,0 +1,275 @@
+@page "/decks/{Id:guid}"
+@implements IAsyncDisposable
+@inject DeckService DeckService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — @(_deck?.Name ?? "Deck")</PageTitle>
+
+@if (_deck is null)
+{
+    <p><em>Loading…</em></p>
+}
+else
+{
+    <nav aria-label="breadcrumb">
+        <ol class="breadcrumb">
+            <li class="breadcrumb-item"><a href="courses">Courses</a></li>
+            <li class="breadcrumb-item"><a href="courses/@_deck.CourseId">@(_deck.Course?.Name ?? "Course")</a></li>
+            <li class="breadcrumb-item active">@_deck.Name</li>
+        </ol>
+    </nav>
+
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h1 class="mb-0">@_deck.Name</h1>
+        <a class="btn btn-primary" href="review/deck/@Id">▶ Review this deck</a>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header">Add a card</div>
+                <div class="card-body">
+                    <textarea class="form-control mb-2" rows="2" placeholder="Front (question)"
+                              @bind="_newFront" @bind:event="oninput"></textarea>
+                    <textarea class="form-control mb-2" rows="2" placeholder="Back (answer)"
+                              @bind="_newBack" @bind:event="oninput"></textarea>
+                    <button class="btn btn-primary"
+                            disabled="@(string.IsNullOrWhiteSpace(_newFront) || string.IsNullOrWhiteSpace(_newBack))"
+                            @onclick="AddCardAsync">
+                        Add card
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-12 col-lg-6">
+            <div class="card">
+                <div class="card-header">Bulk import — one card per line</div>
+                <div class="card-body">
+                    <textarea class="form-control font-monospace mb-2" rows="5"
+                              placeholder="@ImportPlaceholder"
+                              @bind="_importText" @bind:event="oninput"></textarea>
+                    <button class="btn btn-outline-primary me-2"
+                            disabled="@string.IsNullOrWhiteSpace(_importText)" @onclick="PreviewImport">
+                        Preview
+                    </button>
+
+                    @if (_importPreview is { } preview)
+                    {
+                        <div class="alert alert-light border mt-3 mb-2">
+                            <div><strong>@preview.NewCount</strong> new card@(preview.NewCount == 1 ? "" : "s") ready to import.</div>
+                            @if (preview.DuplicateCount > 0)
+                            {
+                                <div class="text-warning-emphasis">
+                                    @preview.DuplicateCount duplicate@(preview.DuplicateCount == 1 ? "" : "s") found —
+                                    <label class="form-check-label">
+                                        <input type="checkbox" class="form-check-input" @bind="_includeDuplicates" />
+                                        import anyway
+                                    </label>
+                                </div>
+                            }
+                            @if (preview.SkippedLines.Count > 0)
+                            {
+                                <div class="text-danger mt-1">
+                                    @preview.SkippedLines.Count line@(preview.SkippedLines.Count == 1 ? "" : "s") skipped (no separator found):
+                                    <ul class="mb-0 small">
+                                        @foreach (var line in preview.SkippedLines.Take(5))
+                                        {
+                                            <li><code>@line</code></li>
+                                        }
+                                        @if (preview.SkippedLines.Count > 5)
+                                        {
+                                            <li>…and @(preview.SkippedLines.Count - 5) more</li>
+                                        }
+                                    </ul>
+                                </div>
+                            }
+                        </div>
+                        <button class="btn btn-success" disabled="@(ImportCount == 0)" @onclick="CommitImportAsync">
+                            Import @ImportCount card@(ImportCount == 1 ? "" : "s")
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h2 class="h5 mt-4">Cards (@_deck.Cards.Count)</h2>
+    @if (_deck.Cards.Count == 0)
+    {
+        <p class="text-muted">No cards yet — add one or paste a batch above.</p>
+    }
+    else
+    {
+        <div class="table-responsive" @ref="_cardsTableRef">
+            <table class="table align-middle">
+                <thead>
+                    <tr>
+                        <th>Front</th>
+                        <th>Back</th>
+                        <th>State</th>
+                        <th>Due</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var card in _deck.Cards)
+                    {
+                        <tr>
+                            @if (_editCardId == card.Id)
+                            {
+                                <td><textarea class="form-control" rows="2" @bind="_editFront"></textarea></td>
+                                <td><textarea class="form-control" rows="2" @bind="_editBack"></textarea></td>
+                                <td colspan="3">
+                                    <button class="btn btn-sm btn-primary me-1" @onclick="SaveCardAsync">Save</button>
+                                    <button class="btn btn-sm btn-secondary" @onclick="() => _editCardId = null">Cancel</button>
+                                </td>
+                            }
+                            else
+                            {
+                                <td class="text-break card-cell" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</td>
+                                <td class="text-break text-muted card-cell" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</td>
+                                <td>
+                                    <span class="badge @StateBadge(card.State)">@card.State</span>
+                                </td>
+                                <td class="text-nowrap small">
+                                    @(card.Due is { } due ? due.ToLocalTime().ToString("yyyy-MM-dd") : "—")
+                                </td>
+                                <td class="text-nowrap">
+                                    <button class="btn btn-sm btn-outline-secondary me-1" @onclick="() => StartCardEdit(card)">✏</button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteCardAsync(card.Id)">✕</button>
+                                </td>
+                            }
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+
+    private Deck? _deck;
+    private string _newFront = "";
+    private string _newBack = "";
+    private string _importText = "";
+    private ImportParseResult? _importPreview;
+    private bool _includeDuplicates;
+    private Guid? _editCardId;
+    private string _editFront = "";
+    private string _editBack = "";
+    private ElementReference _cardsTableRef;
+    private IJSObjectReference? _mathJs;
+
+    // Razor sets attribute values directly (not via HTML parsing), so HTML entities like
+    // &#9;/&#10; are never decoded — they'd show up as literal text. Use real tab/newline chars.
+    private const string ImportPlaceholder = "front\tback\nfront :: back\nfront;back";
+
+    private int ImportCount =>
+        _importPreview is not { } p ? 0 : _includeDuplicates ? p.Cards.Count : p.NewCount;
+
+    protected override async Task OnParametersSetAsync() => await ReloadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_mathJs is null)
+        {
+            try
+            {
+                _mathJs = await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                return;
+            }
+        }
+        if (_deck is { Cards.Count: > 0 } && _editCardId is null)
+        {
+            try
+            {
+                await _mathJs.InvokeVoidAsync("renderMath", _cardsTableRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // An edit/reload can advance the render past this element before the
+                // JS call resolves — the element reference goes stale. Harmless;
+                // must not bubble, or it terminates the whole circuit.
+            }
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit already gone; nothing to clean up client-side.
+        }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _deck = await DeckService.GetAsync(Id);
+        if (_deck is null)
+            Nav.NavigateTo("courses");
+    }
+
+    private static string StateBadge(CardState state) => state switch
+    {
+        CardState.New => "text-bg-primary",
+        CardState.Learning => "text-bg-warning",
+        _ => "text-bg-success",
+    };
+
+    private async Task AddCardAsync()
+    {
+        await DeckService.AddCardAsync(Id, _newFront, _newBack);
+        (_newFront, _newBack) = ("", "");
+        await ReloadAsync();
+    }
+
+    private async Task PreviewImport()
+    {
+        var existing = await DeckService.GetFrontsAsync(Id);
+        _importPreview = CardLineParser.Parse(_importText, existing);
+        _includeDuplicates = false;
+    }
+
+    private async Task CommitImportAsync()
+    {
+        if (_importPreview is not { } preview)
+            return;
+        await DeckService.ImportAsync(Id, preview.Cards, _includeDuplicates);
+        (_importText, _importPreview) = ("", null);
+        await ReloadAsync();
+    }
+
+    private void StartCardEdit(Card card)
+    {
+        _editCardId = card.Id;
+        _editFront = card.Front;
+        _editBack = card.Back;
+    }
+
+    private async Task SaveCardAsync()
+    {
+        if (_editCardId is not { } id)
+            return;
+        await DeckService.UpdateCardAsync(id, _editFront, _editBack);
+        _editCardId = null;
+        await ReloadAsync();
+    }
+
+    private async Task DeleteCardAsync(Guid cardId)
+    {
+        await DeckService.SoftDeleteCardAsync(cardId);
+        await ReloadAsync();
+    }
+}

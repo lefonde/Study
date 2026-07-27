@@ -1,0 +1,41 @@
+.review-session {
+    max-width: 44rem;
+}
+
+.review-card .card-body {
+    min-height: 16rem;
+}
+
+.card-face {
+    font-size: 1.35rem;
+    overflow-wrap: anywhere;
+}
+
+/* Content comes from MarkupString (rendered markdown), so reaching its tags
+   requires ::deep — they never receive the component's CSS-isolation scope. */
+.card-face ::deep p:last-child {
+    margin-bottom: 0;
+}
+
+.card-face ::deep .katex-display {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.card-back {
+    color: var(--bs-secondary-color);
+}
+
+/* Grade bar stays reachable at the bottom on phones. */
+.review-controls {
+    position: sticky;
+    bottom: 0;
+    background: var(--bs-body-bg);
+    padding: 0.5rem 0 0.75rem;
+}
+
+.grade-btn {
+    flex: 1;
+    min-height: 3.25rem;
+    font-size: 1.05rem;
+}
