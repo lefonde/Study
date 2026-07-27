@@ -17,15 +17,39 @@ public class AiOptions
     {
         // Prefer the app-scoped key, but honour the conventional ANTHROPIC_API_KEY too so a
         // machine that already has one set just works.
-        ApiKey = configuration["StudyApp:Anthropic:ApiKey"]
-                 ?? configuration["ANTHROPIC_API_KEY"];
+        if (configuration["StudyApp:Anthropic:ApiKey"] is { Length: > 0 } configured)
+            (ApiKey, KeySource) = (configured, "configuration");
+        else if (configuration["ANTHROPIC_API_KEY"] is { Length: > 0 } conventional)
+            (ApiKey, KeySource) = (conventional, "ANTHROPIC_API_KEY");
+        else if (ReadWindowsUserScope("StudyApp__Anthropic__ApiKey") is { Length: > 0 } stored)
+            (ApiKey, KeySource) = (stored, "Windows user environment");
+        else if (ReadWindowsUserScope("ANTHROPIC_API_KEY") is { Length: > 0 } storedAlt)
+            (ApiKey, KeySource) = (storedAlt, "Windows user environment");
+
         Model = configuration["StudyApp:Anthropic:Model"] is { Length: > 0 } m
             ? m
             : "claude-opus-5";
     }
 
+    /// <summary>
+    /// Reads the persisted user-level variable straight out of the registry rather than the
+    /// process's inherited environment block.
+    ///
+    /// This exists because `setx` only reaches processes started *after* it runs: a terminal
+    /// (or IDE) opened beforehand keeps its stale copy, so relaunching the app from there
+    /// still can't see a key that is demonstrably set. Reading the live user environment
+    /// makes `setx` behave the way people reasonably expect. Windows-only by nature — on
+    /// Linux deployments the configuration path above is the real one.
+    /// </summary>
+    private static string? ReadWindowsUserScope(string name) =>
+        OperatingSystem.IsWindows()
+            ? Environment.GetEnvironmentVariable(name, EnvironmentVariableTarget.User)
+            : null;
+
     public string? ApiKey { get; }
     public string Model { get; }
+    /// <summary>Where the key was found — shown in Settings so a wrong/stale key is diagnosable.</summary>
+    public string KeySource { get; } = "none";
     public bool IsConfigured => !string.IsNullOrWhiteSpace(ApiKey);
 
     /// <summary>Last four characters of the key, for confirming *which* key is loaded without exposing it.</summary>
