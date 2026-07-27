@@ -30,5 +30,6 @@ Personal study environment (flashcards + spaced repetition first; materials, cal
 ## Commands
 
 - Run: `dotnet run --project src/StudyApp.Web --urls http://localhost:5170`
+- **Stop the app before building.** A running instance locks its own build output, so `dotnet build` fails with `MSB3027 … locked by StudyApp.Web`: `Get-Process StudyApp.Web -ErrorAction SilentlyContinue | Stop-Process`. Prefer a clean stop over force-killing — a kill mid-write tears the SQLite `-wal`, which `DatabaseRecovery` now quarantines and recovers at startup, but there's no reason to keep exercising it.
 - Test: `dotnet test`
 - Browser preview: `.claude/launch.json` config `studyapp`

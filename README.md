@@ -10,6 +10,17 @@ dotnet run --project src/StudyApp.Web --urls http://localhost:5170
 
 Then open http://localhost:5170. Works fine in a phone browser too (responsive layout).
 
+A running instance holds a lock on its own build output, so `dotnet build` fails with
+`MSB3027 … file is locked by StudyApp.Web` if you forget to stop it first. Stop `Ctrl+C` in
+its terminal, or if it's detached:
+
+```bash
+Get-Process StudyApp.Web -ErrorAction SilentlyContinue | Stop-Process
+```
+
+The app recovers automatically from being killed mid-write — a damaged write-ahead log is
+quarantined and retried at startup — but a clean `Ctrl+C` is still kinder to the database.
+
 ## Test
 
 ```bash
