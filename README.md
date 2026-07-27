@@ -30,19 +30,34 @@ That directory defaults to `%LOCALAPPDATA%\StudyApp` and is overridden with the
 ## Deploying
 
 The app is a normal ASP.NET container — the included `Dockerfile` runs anywhere (Fly.io,
-Railway, Azure Container Apps, a VPS). `fly.toml` is set up for Fly.io specifically:
+Railway, Azure Container Apps, a VPS). `fly.toml` is set up for Fly.io specifically.
+
+Install the CLI once (PowerShell):
 
 ```bash
-fly launch --no-deploy --copy-config
+iwr https://fly.io/install.ps1 -useb | iex
+```
+
+Then, from the repo root:
+
+```bash
+fly auth login
 ```
 
 ```bash
-fly volumes create studyapp_data --size 1
+fly apps create studyapp-lefonde
+```
+
+```bash
+fly volumes create studyapp_data --size 1 --region fra
 ```
 
 ```bash
 fly deploy
 ```
+
+The volume's region must match `primary_region` in `fly.toml`. Subsequent deploys are
+just `fly deploy`; the volume and its data survive.
 
 Two constraints that are easy to get wrong:
 

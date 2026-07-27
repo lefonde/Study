@@ -8,8 +8,13 @@
 # and Blazor Server keeps per-user circuit state in memory — a second instance would both
 # corrupt the database and drop sessions on every other request.
 
-app = "studyapp"
-primary_region = "ams"
+# App names are globally unique across all of Fly — change this if it's taken.
+app = "studyapp-lefonde"
+
+# Blazor Server round-trips EVERY click to the server over a WebSocket, so physical
+# distance to this region is directly how sluggish the UI feels. fra (Frankfurt) is the
+# closest region to Israel; see `fly platform regions` to pick another.
+primary_region = "fra"
 
 [build]
 
