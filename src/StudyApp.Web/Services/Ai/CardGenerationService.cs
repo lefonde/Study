@@ -30,13 +30,25 @@ public class CardGenerationService(
 
         // The course's shared vocabulary, pooled from every extract in it, so cards for one
         // chapter still use terminology established elsewhere in the course.
-        var glossary = await db.MaterialExtracts
+        //
+        // Flattened in memory rather than in SQL: Terms is a JSON column, and unnesting one
+        // inside a query needs a lateral join (CROSS APPLY), which SQLite does not support.
+        // A course's term lists are small, so fetching them whole costs nothing.
+        //
+        // AsNoTracking is required, not optional: Terms is an owned collection, and EF refuses
+        // to track owned entities projected without their owner.
+        var termLists = await db.MaterialExtracts
+            .AsNoTracking()
             .Where(e => e.Material!.CourseId == material.CourseId)
-            .SelectMany(e => e.Terms)
-            .Select(t => $"{t.Term} — {t.Definition}")
-            .Distinct()
-            .Take(200)
+            .Select(e => e.Terms)
             .ToListAsync(ct);
+
+        var glossary = termLists
+            .SelectMany(terms => terms)
+            .Select(t => $"{t.Term} — {t.Definition}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(200)
+            .ToList();
 
         // Existing fronts across the course, so the model writes gaps rather than repeats.
         var existingFronts = await db.Cards
