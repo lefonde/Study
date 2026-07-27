@@ -87,8 +87,20 @@ var app = builder.Build();
 
 app.UseForwardedHeaders();
 
+var loggerFactory = app.Services.GetRequiredService<ILoggerFactory>();
+
+// Recover from a damaged write-ahead log before anything tries to read the database —
+// otherwise an intact database behind a bad -wal looks like total corruption.
+DatabaseRecovery.EnsureOpenable(
+    paths.DatabasePath,
+    Path.Combine(paths.DataDirectory, "quarantine"),
+    loggerFactory.CreateLogger("DatabaseRecovery"));
+
 // Snapshot the user's data before any migration can touch it.
-DatabaseBackup.Run(paths.DatabasePath, paths.BackupDirectory);
+DatabaseBackup.Run(
+    paths.DatabasePath,
+    paths.BackupDirectory,
+    loggerFactory.CreateLogger("DatabaseBackup"));
 using (var scope = app.Services.CreateScope())
 {
     using var db = scope.ServiceProvider
