@@ -80,6 +80,17 @@ fly secrets set StudyApp__Password=... StudyApp__Anthropic__ApiKey=sk-ant-...
 
 ## AI flashcard generation
 
+Set your Anthropic key first. For the current terminal only:
+
+```bash
+$env:StudyApp__Anthropic__ApiKey = "sk-ant-..."
+```
+
+To persist it, use `setx StudyApp__Anthropic__ApiKey "sk-ant-..."` — but note that `setx`
+only affects processes started *after* it runs. The terminal you type it into keeps its old
+environment, so restarting the app from that same terminal won't pick the key up; open a new
+terminal. Settings shows **Connected** with the last four characters when it's loaded.
+
 Two stages, deliberately separated:
 
 1. **Ingest** a material once (Materials tab → *Ingest*). Claude reads the PDF or scan with

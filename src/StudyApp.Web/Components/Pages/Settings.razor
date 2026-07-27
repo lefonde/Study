@@ -23,8 +23,16 @@
         {
             <p class="mb-2"><span class="badge text-bg-secondary">Not configured</span></p>
             <p>AI ingestion and card generation are disabled until an API key is set.</p>
-            <p class="mb-1"><strong>Locally</strong> — set an environment variable and restart:</p>
-            <pre class="bg-body-tertiary border rounded p-2 small mb-3"><code>setx StudyApp__Anthropic__ApiKey "sk-ant-..."</code></pre>
+            <p class="mb-1"><strong>Locally, this session only</strong> — works in the terminal you run the app from:</p>
+            <pre class="bg-body-tertiary border rounded p-2 small mb-3"><code>$env:StudyApp__Anthropic__ApiKey = "sk-ant-..."</code></pre>
+
+            <p class="mb-1"><strong>Locally, permanently</strong>:</p>
+            <pre class="bg-body-tertiary border rounded p-2 small mb-1"><code>setx StudyApp__Anthropic__ApiKey "sk-ant-..."</code></pre>
+            <p class="small text-muted mb-3">
+                <code>setx</code> only reaches processes started <em>afterwards</em>. The terminal you
+                typed it in keeps its old environment, so restarting the app from that same terminal
+                still won't see the key — open a <strong>new</strong> terminal and run it from there.
+            </p>
             <p class="mb-1"><strong>On Fly.io</strong>:</p>
             <pre class="bg-body-tertiary border rounded p-2 small mb-0"><code>fly secrets set StudyApp__Anthropic__ApiKey=sk-ant-...</code></pre>
         }
