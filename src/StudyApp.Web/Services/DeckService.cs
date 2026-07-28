@@ -6,7 +6,7 @@ using StudyApp.Web.Data;
 
 namespace StudyApp.Web.Services;
 
-public record DeckStats(Guid DeckId, string Name, int Total, int Due, int New);
+public record DeckStats(Guid DeckId, string Name, int Total, int Due, int New, Guid? UnitId);
 
 public class DeckService(IDbContextFactory<StudyDbContext> factory, DuePolicy duePolicy)
 {
@@ -22,7 +22,8 @@ public class DeckService(IDbContextFactory<StudyDbContext> factory, DuePolicy du
                 d.Name,
                 d.Cards.Count,
                 d.Cards.Count(c => c.State != CardState.New && c.Due < cutoff),
-                d.Cards.Count(c => c.State == CardState.New)))
+                d.Cards.Count(c => c.State == CardState.New),
+                d.UnitId))
             .ToListAsync();
     }
 
@@ -49,6 +50,15 @@ public class DeckService(IDbContextFactory<StudyDbContext> factory, DuePolicy du
         await using var db = await factory.CreateDbContextAsync();
         var deck = await db.Decks.FirstAsync(d => d.Id == id);
         deck.Name = name.Trim();
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Files a deck under a chapter/lesson, or clears it — the basis of the unit-level progress rollup.</summary>
+    public async Task SetUnitAsync(Guid id, Guid? unitId)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var deck = await db.Decks.FirstAsync(d => d.Id == id);
+        deck.UnitId = unitId;
         await db.SaveChangesAsync();
     }
 

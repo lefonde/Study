@@ -1,0 +1,22 @@
+@* Stacked bucket bar: Mature -> Young -> Learning -> Unseen, left to right by count.
+   Used on the deck, course and home pages so composition reads the same everywhere. *@
+
+<div class="progress-bar-stack" title="@Tooltip" role="img" aria-label="@Tooltip">
+    @if (Report.Total > 0)
+    {
+        <div class="pb-segment pb-mature" style="width:@(Pct(Report.Mature))%"></div>
+        <div class="pb-segment pb-young" style="width:@(Pct(Report.Young))%"></div>
+        <div class="pb-segment pb-learning" style="width:@(Pct(Report.Learning))%"></div>
+        <div class="pb-segment pb-unseen" style="width:@(Pct(Report.Unseen))%"></div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ProgressReport Report { get; set; } = ProgressReport.Empty;
+
+    private double Pct(int n) => Report.Total == 0 ? 0 : 100.0 * n / Report.Total;
+
+    private string Tooltip => Report.Total == 0
+        ? "No cards yet"
+        : $"{Report.Mature} mature · {Report.Young} young · {Report.Learning} learning · {Report.Unseen} unseen";
+}

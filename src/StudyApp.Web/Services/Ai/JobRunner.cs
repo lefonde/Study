@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using StudyApp.Core.Entities;
 using StudyApp.Web.Data;
+using StudyApp.Web.Services;
 
 namespace StudyApp.Web.Services.Ai;
 
@@ -19,6 +20,7 @@ public class JobRunner(
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         await FailInterruptedJobsAsync(stoppingToken);
+        await CaptureStartupProgressSnapshotsAsync(stoppingToken);
 
         await foreach (var jobId in queue.ReadAllAsync(stoppingToken))
         {
@@ -58,6 +60,27 @@ public class JobRunner(
 
         if (stranded.Count > 0)
             await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Piggybacks on this BackgroundService's existing startup phase rather than adding a
+    /// second hosted service just to run once at boot. Unrelated to the AI job queue below —
+    /// resolved from its own DI scope, not <see cref="ProgressSnapshotService"/> being an AI
+    /// concern.
+    /// </summary>
+    private async Task CaptureStartupProgressSnapshotsAsync(CancellationToken ct)
+    {
+        try
+        {
+            using var scope = scopeFactory.CreateScope();
+            await scope.ServiceProvider.GetRequiredService<ProgressSnapshotService>().CaptureAllAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            // Missing today's snapshot is a gap in a trend chart, not a reason to stop the
+            // job runner from starting.
+            logger.LogWarning(ex, "Startup progress snapshot capture failed");
+        }
     }
 
     private async Task RunOneAsync(Guid jobId, CancellationToken ct)

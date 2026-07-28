@@ -163,6 +163,9 @@ builder.Services.AddScoped<ReviewService>();
 builder.Services.AddSingleton<MaterialFileStore>();
 builder.Services.AddScoped<CourseUnitService>();
 builder.Services.AddScoped<MaterialService>();
+builder.Services.AddSingleton<ProgressPolicy>();
+builder.Services.AddScoped<ProgressService>();
+builder.Services.AddScoped<ProgressSnapshotService>();
 
 // AI pipeline. The runner is a singleton BackgroundService; the per-job services are scoped
 // because they use the DbContext factory and are resolved per job.

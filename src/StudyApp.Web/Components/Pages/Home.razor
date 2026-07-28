@@ -1,6 +1,7 @@
 @page "/"
 @inject ReviewService ReviewService
 @inject MaterialService MaterialService
+@inject ProgressService ProgressService
 
 <PageTitle>StudyApp — Home</PageTitle>
 
@@ -50,12 +51,21 @@ else
         <div class="list-group mb-4">
             @foreach (var a in _upcomingAssignments)
             {
-                <a href="courses/@a.CourseId" class="list-group-item list-group-item-action d-flex align-items-center justify-content-between flex-wrap gap-2">
-                    <span>
-                        <span class="fw-semibold">@a.Title</span>
-                        <span class="text-muted small">— @a.Course?.Name</span>
-                    </span>
-                    <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
+                <a href="courses/@a.CourseId" class="list-group-item list-group-item-action">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <span>
+                            <span class="fw-semibold">@a.Title</span>
+                            <span class="text-muted small">— @a.Course?.Name</span>
+                        </span>
+                        <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
+                    </div>
+                    @if (_assignmentForecasts.TryGetValue(a.Id, out var forecast) && forecast.AlreadyDurable + forecast.WillLapseBeforeTarget > 0)
+                    {
+                        <div class="text-muted small mt-1">
+                            If you keep up reviews, ~@Pct(forecast.ProjectedMastery) of @a.Course?.Name will likely be
+                            durable by then (@forecast.WillLapseBeforeTarget card@(forecast.WillLapseBeforeTarget == 1 ? "" : "s") still need review before).
+                        </div>
+                    }
                 </a>
             }
         </div>
@@ -65,9 +75,21 @@ else
         @foreach (var course in _summary.Courses)
         {
             <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap gap-2">
-                <div class="d-flex align-items-center gap-2">
-                    <span class="course-dot" style="background:@course.Color"></span>
-                    <a href="courses/@course.CourseId" class="fw-semibold text-decoration-none">@course.Name</a>
+                <div class="flex-grow-1" style="min-width: 10rem;">
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="course-dot" style="background:@course.Color"></span>
+                        <a href="courses/@course.CourseId" class="fw-semibold text-decoration-none">@course.Name</a>
+                        @if (_courseProgress.TryGetValue(course.CourseId, out var cp) && cp.Total > 0)
+                        {
+                            <span class="text-muted small">@Pct(cp.Mastery) mastery</span>
+                        }
+                    </div>
+                    @if (_courseProgress.TryGetValue(course.CourseId, out var barReport) && barReport.Total > 0)
+                    {
+                        <div class="mt-1" style="max-width: 14rem;">
+                            <ProgressBar Report="barReport" />
+                        </div>
+                    }
                 </div>
                 <div class="d-flex align-items-center gap-3">
                     <span title="Due today">
@@ -100,12 +122,25 @@ else
 @code {
     private HomeSummary? _summary;
     private List<Material> _upcomingAssignments = [];
+    private Dictionary<Guid, ProgressReport> _courseProgress = [];
+    private Dictionary<Guid, ProgressForecast> _assignmentForecasts = [];
 
     protected override async Task OnInitializedAsync()
     {
         _summary = await ReviewService.GetHomeSummaryAsync();
         _upcomingAssignments = await MaterialService.GetUpcomingAssignmentsAsync();
+
+        // Small sets (courses and upcoming assignments are both capped low), so a query per
+        // item is simpler than a bespoke batch query and costs nothing noticeable here.
+        foreach (var course in _summary.Courses)
+            _courseProgress[course.CourseId] = await ProgressService.GetCourseProgressAsync(course.CourseId);
+
+        foreach (var assignment in _upcomingAssignments.Where(a => a.DueDate is not null))
+            _assignmentForecasts[assignment.Id] =
+                await ProgressService.GetCourseForecastAsync(assignment.CourseId, assignment.DueDate!.Value);
     }
+
+    private static string Pct(double fraction) => $"{fraction * 100:0}%";
 
     private static string DueLabel(DateTime due)
     {

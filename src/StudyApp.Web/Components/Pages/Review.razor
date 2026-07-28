@@ -3,6 +3,7 @@
 @page "/review/deck/{DeckId:guid}"
 @implements IAsyncDisposable
 @inject ReviewService ReviewService
+@inject ProgressSnapshotService ProgressSnapshotService
 @inject IJSRuntime JS
 
 <PageTitle>StudyApp — Review</PageTitle>
@@ -102,6 +103,7 @@ else
     private int _reviewCount;
     private int _againCount;
     private (Card Card, GradeResult Result, ReviewGrade Grade, bool Requeued, int PrevIndex)? _lastAction;
+    private bool _snapshotsCaptured;
 
     private IJSObjectReference? _js;
     private IJSObjectReference? _mathJs;
@@ -207,10 +209,38 @@ else
             _reviewCount++;
             _index++;
             _revealed = false;
+
+            if (_index >= _queue.Count)
+                await CaptureSessionSnapshotsAsync();
         }
         finally
         {
             _grading = false;
+        }
+    }
+
+    /// <summary>
+    /// Refreshes today's progress snapshot for every deck touched this session, once, right as
+    /// the session completes. A course-scoped or global session can span several decks, so this
+    /// walks the distinct deck ids in the queue rather than assuming <see cref="DeckId"/>.
+    /// A snapshot miss must never break the completion screen, hence the swallow.
+    /// </summary>
+    private async Task CaptureSessionSnapshotsAsync()
+    {
+        if (_snapshotsCaptured || _queue is not { Count: > 0 })
+            return;
+        _snapshotsCaptured = true;
+
+        foreach (var deckId in _queue.Select(c => c.DeckId).Distinct())
+        {
+            try
+            {
+                await ProgressSnapshotService.CaptureForDeckAsync(deckId);
+            }
+            catch (Exception)
+            {
+                // Best-effort — a stale trend point tomorrow is not worth breaking review over.
+            }
         }
     }
 
@@ -241,6 +271,7 @@ else
         _reviewCount = 0;
         _againCount = 0;
         _lastAction = null;
+        _snapshotsCaptured = false;
     }
 
     public async ValueTask DisposeAsync()

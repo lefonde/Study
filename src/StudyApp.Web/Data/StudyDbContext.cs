@@ -14,6 +14,7 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<MaterialExtract> MaterialExtracts => Set<MaterialExtract>();
     public DbSet<CardSuggestion> CardSuggestions => Set<CardSuggestion>();
     public DbSet<GenerationJob> GenerationJobs => Set<GenerationJob>();
+    public DbSet<ProgressSnapshot> ProgressSnapshots => Set<ProgressSnapshot>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -30,6 +31,14 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasOne(d => d.Course)
             .WithMany(c => c.Decks)
             .HasForeignKey(d => d.CourseId);
+
+        // SetNull, matching Card.UnitId/Material.UnitId: deleting a unit must not delete the
+        // deck that was filed under it, only stop counting it toward that unit's rollup.
+        modelBuilder.Entity<Deck>()
+            .HasOne(d => d.Unit)
+            .WithMany()
+            .HasForeignKey(d => d.UnitId)
+            .OnDelete(DeleteBehavior.SetNull);
 
         modelBuilder.Entity<Card>()
             .HasOne(c => c.Deck)
@@ -134,6 +143,20 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasForeignKey(j => j.MaterialId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // Historical record like ReviewLog — kept even if the deck is later soft-deleted, so
+        // no query filter and Cascade only follows a genuine hard delete (never used today).
+        modelBuilder.Entity<ProgressSnapshot>()
+            .HasOne(s => s.Deck)
+            .WithMany()
+            .HasForeignKey(s => s.DeckId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<ProgressSnapshot>()
+            .HasOne(s => s.Course)
+            .WithMany()
+            .HasForeignKey(s => s.CourseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
         modelBuilder.Entity<Card>().HasIndex(c => new { c.DeckId, c.Due });
         modelBuilder.Entity<ReviewLog>().HasIndex(r => r.ReviewedAt);
         modelBuilder.Entity<CourseUnit>().HasIndex(u => new { u.CourseId, u.ParentId, u.Order });
@@ -143,5 +166,9 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         modelBuilder.Entity<CardSuggestion>().HasIndex(s => new { s.CourseId, s.Status });
         modelBuilder.Entity<CardSuggestion>().HasIndex(s => s.BatchId);
         modelBuilder.Entity<GenerationJob>().HasIndex(j => new { j.CourseId, j.Status });
+        modelBuilder.Entity<Deck>().HasIndex(d => d.UnitId);
+        // One capture per deck per day — the idempotency guarantee the capture job relies on.
+        modelBuilder.Entity<ProgressSnapshot>().HasIndex(s => new { s.DeckId, s.CapturedOn }).IsUnique();
+        modelBuilder.Entity<ProgressSnapshot>().HasIndex(s => new { s.CourseId, s.CapturedOn });
     }
 }

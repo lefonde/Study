@@ -1,6 +1,7 @@
 @page "/decks/{Id:guid}"
 @implements IAsyncDisposable
 @inject DeckService DeckService
+@inject ProgressService ProgressService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
 
@@ -24,6 +25,66 @@ else
         <h1 class="mb-0">@_deck.Name</h1>
         <a class="btn btn-primary" href="review/deck/@Id">▶ Review this deck</a>
     </div>
+
+    @if (_progress is { Total: > 0 } progress)
+    {
+        <div class="card mb-4">
+            <div class="card-body">
+                <div class="row g-3 align-items-center mb-2">
+                    <div class="col-6 col-md-3">
+                        <div class="text-muted small">Mastery</div>
+                        <div class="fs-4">@Pct(progress.Mastery)</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="text-muted small" title="Odds you'd recall each card right now">Recall now</div>
+                        <div class="fs-4">@Pct(progress.RecallNow)</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="text-muted small" title="Successful grades over the last 30 days">30-day retention</div>
+                        <div class="fs-4">@(progress.Retention is { } r ? Pct(r) : "—")</div>
+                    </div>
+                    <div class="col-6 col-md-3">
+                        <div class="text-muted small">Overdue</div>
+                        <div class="fs-4 @(progress.Overdue > 0 ? "text-danger" : "")">@progress.Overdue</div>
+                    </div>
+                </div>
+
+                <ProgressBar Report="progress" />
+                <div class="d-flex flex-wrap gap-3 mt-2 small text-muted">
+                    <span><span class="legend-dot pb-mature"></span> @progress.Mature mature</span>
+                    <span><span class="legend-dot pb-young"></span> @progress.Young young</span>
+                    <span><span class="legend-dot pb-learning"></span> @progress.Learning learning</span>
+                    <span><span class="legend-dot pb-unseen-outline"></span> @progress.Unseen unseen</span>
+                </div>
+
+                @if (_trend.Count >= 2)
+                {
+                    <div class="mt-3">
+                        <div class="text-muted small mb-1">Mastery, last @_trend.Count day@(_trend.Count == 1 ? "" : "s")</div>
+                        @((MarkupString)TrendSparkline())
+                    </div>
+                }
+
+                @if (progress.Leeches > 0)
+                {
+                    <div class="alert alert-warning mt-3 mb-0 py-2">
+                        <strong>@progress.Leeches leech@(progress.Leeches == 1 ? "" : "es")</strong> —
+                        cards that keep getting forgotten (8+ lapses). Consider rewriting or splitting them:
+                        <ul class="mb-0 small mt-1">
+                            @foreach (var leech in _leeches.Take(5))
+                            {
+                                <li class="text-truncate">@leech.Front</li>
+                            }
+                            @if (_leeches.Count > 5)
+                            {
+                                <li>…and @(_leeches.Count - 5) more</li>
+                            }
+                        </ul>
+                    </div>
+                }
+            </div>
+        </div>
+    }
 
     <div class="row g-4">
         <div class="col-12 col-lg-6">
@@ -164,6 +225,10 @@ else
     private ElementReference _cardsTableRef;
     private IJSObjectReference? _mathJs;
 
+    private ProgressReport? _progress;
+    private List<ProgressSnapshot> _trend = [];
+    private List<Card> _leeches = [];
+
     // Razor sets attribute values directly (not via HTML parsing), so HTML entities like
     // &#9;/&#10; are never decoded — they'd show up as literal text. Use real tab/newline chars.
     private const string ImportPlaceholder = "front\tback\nfront :: back\nfront;back";
@@ -218,7 +283,42 @@ else
     {
         _deck = await DeckService.GetAsync(Id);
         if (_deck is null)
+        {
             Nav.NavigateTo("courses");
+            return;
+        }
+        _progress = await ProgressService.GetDeckProgressAsync(Id);
+        _trend = await ProgressService.GetTrendAsync(Id);
+        _leeches = _deck.Cards.Where(c => c.Lapses >= ProgressPolicy.LeechLapses).ToList();
+    }
+
+    private static string Pct(double fraction) => $"{fraction * 100:0}%";
+
+    /// <summary>
+    /// A minimal inline SVG line, not a charting library — the trend is one series over a
+    /// handful of points, and every other visual in this app is plain HTML/CSS already.
+    /// </summary>
+    private string TrendSparkline()
+    {
+        const int width = 280, height = 40, pad = 4;
+        var points = _trend;
+        var min = points.Min(p => p.Mastery);
+        var max = points.Max(p => p.Mastery);
+        var range = Math.Max(max - min, 0.01); // avoid a divide-by-zero on a flat line
+
+        var coords = points.Select((p, i) =>
+        {
+            var x = pad + i * (width - 2.0 * pad) / Math.Max(points.Count - 1, 1);
+            var y = height - pad - (p.Mastery - min) / range * (height - 2.0 * pad);
+            return $"{x:0.#},{y:0.#}";
+        });
+
+        return $"""
+            <svg viewBox="0 0 {width} {height}" width="100%" height="{height}" preserveAspectRatio="none"
+                 class="trend-sparkline" role="img" aria-label="Mastery trend">
+                <polyline points="{string.Join(' ', coords)}" fill="none" stroke="#2e7d32" stroke-width="2" />
+            </svg>
+            """;
     }
 
     private static string StateBadge(CardState state) => state switch

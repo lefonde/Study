@@ -4,6 +4,7 @@
 @inject DeckService DeckService
 @inject CourseUnitService UnitService
 @inject MaterialService MaterialService
+@inject ProgressService ProgressService
 @inject AiOptions AiOptions
 @inject AiJobService AiJobService
 @inject SuggestionService SuggestionService
@@ -75,6 +76,19 @@ else
 
     @if (_activeTab == "decks")
     {
+        @if (_courseProgress is { Total: > 0 } cp)
+        {
+            <div class="card mb-3">
+                <div class="card-body py-2">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
+                        <span class="small text-muted">Course mastery</span>
+                        <span class="fw-semibold">@Pct(cp.Mastery)</span>
+                    </div>
+                    <ProgressBar Report="cp" />
+                </div>
+            </div>
+        }
+
         <div class="input-group mb-3" style="max-width: 30rem;">
             <input class="form-control" placeholder="New deck name, e.g. Chapter 3"
                    @bind="_newDeckName" @bind:event="oninput" />
@@ -93,8 +107,25 @@ else
                 @foreach (var deck in _deckStats)
                 {
                     <div class="list-group-item d-flex align-items-center justify-content-between flex-wrap gap-2">
-                        <a href="decks/@deck.DeckId" class="fw-semibold text-decoration-none">@deck.Name</a>
-                        <div class="d-flex align-items-center gap-3">
+                        <div class="flex-grow-1" style="min-width: 12rem;">
+                            <a href="decks/@deck.DeckId" class="fw-semibold text-decoration-none">@deck.Name</a>
+                            @if (DeckProgressFor(deck.DeckId) is { Total: > 0 } dp)
+                            {
+                                <div class="mt-1" style="max-width: 16rem;">
+                                    <ProgressBar Report="dp" />
+                                </div>
+                            }
+                        </div>
+                        <div class="d-flex align-items-center gap-2 flex-wrap">
+                            <select class="form-select form-select-sm" style="width: auto;"
+                                    title="Unit this deck counts toward"
+                                    @onchange="e => SetDeckUnitAsync(deck.DeckId, (string?)e.Value)">
+                                <option value="" selected="@(deck.UnitId is null)">— no unit —</option>
+                                @foreach (var u in _allUnits)
+                                {
+                                    <option value="@u.Id" selected="@(deck.UnitId == u.Id)">@UnitPath(u.Id)</option>
+                                }
+                            </select>
                             <span class="text-muted small">@deck.Total card@(deck.Total == 1 ? "" : "s")</span>
                             @if (deck.Due > 0)
                             {
@@ -161,6 +192,12 @@ else
                                     {
                                         <span class="badge text-bg-success ms-1">you are here</span>
                                     }
+                                    @if (UnitProgressFor(chapter.Id) is { Total: > 0 } chapterProgress)
+                                    {
+                                        <span class="badge text-bg-light border ms-1" title="Mastery across this chapter's cards">
+                                            @Pct(chapterProgress.Mastery) mastery
+                                        </span>
+                                    }
                                 </span>
                                 <div class="d-flex gap-1">
                                     <button class="btn btn-sm btn-outline-primary" @onclick="() => SetPositionAsync(chapter.Id)">Set as position</button>
@@ -189,6 +226,12 @@ else
                                             @if (_course.CurrentUnitId == lesson.Id)
                                             {
                                                 <span class="badge text-bg-success ms-1">you are here</span>
+                                            }
+                                            @if (UnitProgressFor(lesson.Id) is { Total: > 0 } lessonProgress)
+                                            {
+                                                <span class="badge text-bg-light border ms-1" title="Mastery across this lesson's cards">
+                                                    @Pct(lessonProgress.Mastery) mastery
+                                                </span>
                                             }
                                         </span>
                                         <div class="d-flex gap-1">
@@ -571,6 +614,10 @@ else
     private bool _hasActiveJobs;
     private string? _jobError;
 
+    private ProgressReport? _courseProgress;
+    private List<DeckProgressRow> _deckProgress = [];
+    private List<UnitProgressRow> _unitProgress = [];
+
     private List<CardSuggestion> _suggestions = [];
     private Guid? _inboxDeckId;
     private Guid? _editingSuggestionId;
@@ -648,6 +695,25 @@ else
         _spend = await AiJobService.GetSpendAsync(Id);
         _suggestions = await SuggestionService.GetPendingAsync(Id);
         _inboxDeckId ??= _deckStats.FirstOrDefault()?.DeckId;
+
+        _courseProgress = await ProgressService.GetCourseProgressAsync(Id);
+        _deckProgress = await ProgressService.GetDecksProgressAsync(Id);
+        _unitProgress = await ProgressService.GetUnitsProgressAsync(Id);
+    }
+
+    private static string Pct(double fraction) => $"{fraction * 100:0}%";
+
+    private ProgressReport? DeckProgressFor(Guid deckId) =>
+        _deckProgress.FirstOrDefault(r => r.DeckId == deckId)?.Report;
+
+    private ProgressReport? UnitProgressFor(Guid unitId) =>
+        _unitProgress.FirstOrDefault(r => r.UnitId == unitId)?.Report;
+
+    private async Task SetDeckUnitAsync(Guid deckId, string? unitIdValue)
+    {
+        var unitId = string.IsNullOrEmpty(unitIdValue) ? (Guid?)null : Guid.Parse(unitIdValue);
+        await DeckService.SetUnitAsync(deckId, unitId);
+        await ReloadAsync();
     }
 
     // --- AI ---

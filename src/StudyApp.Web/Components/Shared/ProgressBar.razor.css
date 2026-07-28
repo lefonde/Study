@@ -1,0 +1,29 @@
+.progress-bar-stack {
+    display: flex;
+    width: 100%;
+    height: 0.6rem;
+    border-radius: 0.3rem;
+    overflow: hidden;
+    background: var(--bs-secondary-bg, #e9ecef);
+}
+
+.pb-segment {
+    height: 100%;
+    transition: width 0.3s ease;
+}
+
+.pb-mature {
+    background: #2e7d32; /* durably learned */
+}
+
+.pb-young {
+    background: #66bb6a; /* learned, not yet mature */
+}
+
+.pb-learning {
+    background: #ffb74d; /* actively being learned */
+}
+
+.pb-unseen {
+    background: transparent; /* no visual weight for cards not yet studied */
+}

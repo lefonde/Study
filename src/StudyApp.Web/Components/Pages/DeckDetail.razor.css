@@ -7,3 +7,22 @@
 .card-cell ::deep .katex-display {
     margin: 0.25rem 0;
 }
+
+.legend-dot {
+    display: inline-block;
+    width: 0.6rem;
+    height: 0.6rem;
+    border-radius: 50%;
+    margin-right: 0.25rem;
+}
+
+/* ProgressBar's bucket colors, mirrored here for the legend under it — a legend swatch and
+   the bar it describes must never drift out of sync, so both read from the same names. */
+.legend-dot.pb-mature { background: #2e7d32; }
+.legend-dot.pb-young { background: #66bb6a; }
+.legend-dot.pb-learning { background: #ffb74d; }
+.legend-dot.pb-unseen-outline { background: transparent; border: 1px solid var(--bs-secondary-color, #6c757d); }
+
+.trend-sparkline {
+    display: block;
+}
