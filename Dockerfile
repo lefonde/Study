@@ -1,20 +1,23 @@
-# Both images are pinned, not floating on :10.0.
-#
-# The floating tag moved to SDK 10.0.302, a different feature band from the 10.0.2xx used
-# locally, and that build stopped emitting wwwroot/_framework into the publish output — so the
-# deployed app 404'd on blazor.web.js and every interactive control was dead while the rest of
-# the site looked fine. Pinning makes the container reproduce a build that is actually verified
-# rather than silently changing under us. Bump deliberately, and re-test interactivity after.
+# Images are pinned rather than floating on :10.0 so a container build reproduces something
+# actually verified instead of drifting when the tag moves to a new SDK feature band.
 FROM mcr.microsoft.com/dotnet/sdk:10.0.203 AS build
 WORKDIR /src
 
-# Restore against the project files alone so this layer stays cached while source churns.
+# Warm the NuGet cache from the project files alone, so this layer stays cached while source
+# churns and the restore during publish is then nearly instant.
 COPY src/StudyApp.Core/StudyApp.Core.csproj src/StudyApp.Core/
 COPY src/StudyApp.Web/StudyApp.Web.csproj src/StudyApp.Web/
 RUN dotnet restore src/StudyApp.Web/StudyApp.Web.csproj
 
 COPY src/ src/
-RUN dotnet publish src/StudyApp.Web/StudyApp.Web.csproj -c Release -o /app --no-restore
+
+# Deliberately NOT --no-restore. That restore above ran with only the .csproj files present —
+# no source, no wwwroot — which leaves static web asset resolution incomplete. Reusing it made
+# publish silently omit wwwroot/_framework, so the deployed app served every asset except
+# Blazor's runtime: the site rendered and styled correctly but no button did anything.
+# Letting publish restore again costs a couple of seconds (packages are already cached) and is
+# the difference between a working app and a dead one.
+RUN dotnet publish src/StudyApp.Web/StudyApp.Web.csproj -c Release -o /app
 
 # Assert here as well as in the runtime stage, so a failure says whether publish never emitted
 # the Blazor runtime or the copy lost it. Prints the SDK actually used, because a floating base
