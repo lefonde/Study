@@ -1,0 +1,446 @@
+@page "/how-it-works"
+@implements IAsyncDisposable
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — How it works</PageTitle>
+
+<div @ref="_pageRef">
+
+    <h1 class="mb-1">How review and progress work</h1>
+    <p class="text-muted mb-4">
+        The pedagogy behind the schedule, and the exact math behind Mastery and Recall — no black boxes.
+        One card's journey runs through every section below, so the numbers stay connected.
+    </p>
+
+    <nav class="how-toc mb-5">
+        <a href="#pedagogy">Why spaced repetition</a>
+        <a href="#algorithm">How review scheduling works</a>
+        <a href="#progress">How Mastery &amp; Recall are calculated</a>
+        <a href="#future">Why this can change later</a>
+    </nav>
+
+    <section id="pedagogy" class="mb-5">
+        <h2>Why review on a schedule instead of just re-reading?</h2>
+        <p>
+            Anything you learn starts fading the moment you stop looking at it. The psychologist Hermann
+            Ebbinghaus mapped this over a century ago: memory drops fastest right after you learn something,
+            then the drop-off flattens out. Re-reading or highlighting notes doesn't fight that curve — it just
+            delays the moment you notice you've forgotten.
+        </p>
+        <p>Two ideas do the actual work here:</p>
+        <ul>
+            <li>
+                <strong>Active recall.</strong> Trying to produce the answer yourself, before you see it,
+                exercises the same retrieval you'll need in an exam or a conversation — which is why a card
+                shows the question first and makes you grade your own honesty, instead of showing question and
+                answer side by side.
+            </li>
+            <li>
+                <strong>The spacing effect.</strong> Reviewing right as you're about to forget something
+                strengthens the memory more than reviewing it while it's still fresh. And each time that
+                works, the next gap before you'd forget again gets longer — so the reviews themselves get
+                rarer even as the material gets more solid.
+            </li>
+        </ul>
+
+        @((MarkupString)SpacingCurveSvg())
+        <p class="text-muted small mb-4">
+            One card, reviewed three times. Each review lands right around the point recall would have dropped
+            to about 90% — not so early it's wasted, not so late the card was actually forgotten. Succeeding
+            pushes the next gap out further: 1 day, then 6, then 15. The exact numbers behind this curve are
+            the subject of the next two sections.
+        </p>
+
+        <div class="alert alert-light border mb-0">
+            This app schedules every card this way automatically. You never decide when to study something
+            next — you only grade how the last attempt went, and the schedule follows from that.
+        </div>
+    </section>
+
+    <section id="algorithm" class="mb-5">
+        <h2>The algorithm: SM-2</h2>
+        <p>
+            Scheduling is handled by <strong>SM-2</strong>, the algorithm behind Anki and most flashcard
+            software since the 1980s. Every card carries a bit of state — how many days until it's due
+            (<em>interval</em>), and a personal difficulty dial called the <em>ease factor</em>, which starts
+            at <strong>2.5</strong> for every new card and drifts up or down based on how you grade it.
+        </p>
+
+        <h3 class="h5 mt-4">The four grades</h3>
+        <div class="table-responsive">
+            <table class="table table-sm align-middle">
+                <thead>
+                    <tr>
+                        <th>Grade</th>
+                        <th>You...</th>
+                        <th>While still Learning</th>
+                        <th>Once it's graduated to Review</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><span class="badge text-bg-danger">Again</span></td>
+                        <td>Got it wrong</td>
+                        <td>Repeats right away, no penalty yet</td>
+                        <td>Counts as a lapse; ease drops by 0.20; back to Learning, due immediately</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge text-bg-warning">Hard</span></td>
+                        <td>Right, but it was a struggle</td>
+                        <td>Repeats right away, no penalty</td>
+                        <td>Interval barely grows (×1.2); ease drops by 0.15</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge text-bg-success">Good</span></td>
+                        <td>Right, at a normal pace</td>
+                        <td>Graduates: 1 day, then 6 days</td>
+                        <td>Interval grows by the card's ease factor (starts at ×2.5)</td>
+                    </tr>
+                    <tr>
+                        <td><span class="badge text-bg-primary">Easy</span></td>
+                        <td>Right, trivially</td>
+                        <td>Graduates straight to 4 days</td>
+                        <td>Interval grows extra fast (×ease×1.3); ease itself increases</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted small">
+            Ease has a floor of 1.3× — a card can get slower to grow, but never grinds toward zero — and no
+            interval is ever scheduled more than 365 days out.
+        </p>
+
+        <h3 class="h5 mt-4">Following one card</h3>
+        <p>Same card as the diagram above, extended: what happens if you keep pressing Good.</p>
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Review</th>
+                        <th>You pressed</th>
+                        <th>New interval</th>
+                        <th>Bucket</th>
+                        <th>Mastery right after</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr><td>1</td><td>Good</td><td>1 day</td><td>Young</td><td>5%</td></tr>
+                    <tr><td>2</td><td>Good</td><td>6 days</td><td>Young</td><td>29%</td></tr>
+                    <tr><td>3</td><td>Good</td><td>15 days</td><td>Young</td><td>71%</td></tr>
+                    <tr class="table-success">
+                        <td>4</td><td>Good</td><td>38 days</td><td>Mature 🎉</td><td>100% (capped)</td>
+                    </tr>
+                    <tr><td>5</td><td>Good</td><td>95 days</td><td>Mature</td><td>100%</td></tr>
+                    <tr><td>6</td><td>Good</td><td>238 days</td><td>Mature</td><td>100%</td></tr>
+                    <tr><td>7</td><td>Good</td><td>365 days (capped)</td><td>Mature</td><td>100%</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <p class="text-muted small">
+            Four consecutive "Good"s and this card crosses the 21-day line and becomes Mature — the point
+            Anki's convention treats as durably learned. Mastery (explained below) reads that same line.
+        </p>
+
+        <h3 class="h5 mt-4">Where a card sits</h3>
+        <div class="flow-row">
+            <div class="flow-step flow-unseen">
+                <div class="flow-title">Unseen</div>
+                <div class="flow-sub">Never reviewed</div>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step flow-learning">
+                <div class="flow-title">Learning</div>
+                <div class="flow-sub">Being drilled this session</div>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step flow-young">
+                <div class="flow-title">Young</div>
+                <div class="flow-sub">In Review, interval &lt; 21 days</div>
+            </div>
+            <div class="flow-arrow">→</div>
+            <div class="flow-step flow-mature">
+                <div class="flow-title">Mature</div>
+                <div class="flow-sub">In Review, interval ≥ 21 days</div>
+            </div>
+        </div>
+        <div class="flow-again">
+            ↩ <strong>Again</strong> sends a card back to Learning from anywhere on this line — and once it's
+            past Learning, it also costs a lapse. Eight lapses on one card marks it a <em>leech</em> (more on
+            that below): something worth rewriting rather than keep re-losing time on.
+        </div>
+        <p class="text-muted small mt-3 mb-0">
+            One more scheduling detail: the study day rolls over at 4am local time, not midnight — so a card
+            reviewed at 11pm doesn't come due again the moment the clock ticks past 12, and a 1am session
+            still counts as "tonight."
+        </p>
+    </section>
+
+    <section id="progress" class="mb-5">
+        <h2>How Mastery and Recall are calculated</h2>
+        <p>
+            Progress is reported as <strong>two independent numbers</strong>, on purpose, instead of one
+            score. A single percentage would either hide a wall of overdue cards behind a good-looking
+            number, or fall every night while you sleep, whether or not you did anything wrong. Splitting it
+            avoids both:
+        </p>
+        <ul>
+            <li><strong>Mastery</strong> — how durably learned a card is. Only moves when you study.</li>
+            <li><strong>Recall now</strong> — the odds you'd get it right this instant. Decays with elapsed
+                time by design, because forgetting is real and hiding it would make the number useless for
+                deciding what to study.</li>
+        </ul>
+
+        <h3 class="h5 mt-4">Mastery — how durably learned is this card?</h3>
+        <p>It's just the card's interval, scaled against the same 21-day line from the table above, and capped at 1:</p>
+        <div class="formula-box">
+            \[
+            \text{Mastery} = \operatorname{clamp}\!\left(\dfrac{\text{interval (days)}}{21},\ 0,\ 1\right)
+            \]
+        </div>
+        <p>
+            New and Learning cards score exactly 0 — nothing has been proven durable yet. Cards keep the
+            interval growing well past 38 days in the table above (95, then 238, then the 365-day cap), but
+            Mastery stops climbing at 21: hitting 100% means "crossed the durable-learning line," not "this
+            card is finished forever."
+        </p>
+
+        <h3 class="h5 mt-4">Recall now — what are your odds this instant?</h3>
+        <p>
+            This one follows the forgetting curve directly, anchored at the same 90% every scheduler — SM-2
+            today, FSRS later — aims for right when a card comes due:
+        </p>
+        <div class="formula-box">
+            \[
+            \text{RecallNow} = 0.9^{\,\text{days since last review}\ /\ \text{interval (days)}}
+            \]
+        </div>
+        <p>
+            Because of that anchor, a card exactly on schedule always reads ~90%, no matter how long its
+            interval has grown to. Reviewed early, it reads higher; left late, it reads lower. Zooming in on
+            review 3 from the table above — a 15-day interval — shows the shape:
+        </p>
+
+        @((MarkupString)RecallZoomSvg())
+        <p class="text-muted small mb-4">
+            Show up right after reviewing and it's ~100%. Show up exactly on schedule (day 15) and it's the
+            anchor, 90%. Let it sit twice as long (day 30, two weeks overdue) and it's dropped to 81% —
+            the same curve cut short in the very first diagram, continued past the point that card was
+            actually reviewed.
+        </p>
+
+        <h3 class="h5 mt-4">The buckets</h3>
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead><tr><th>Bucket</th><th>Meaning</th></tr></thead>
+                <tbody>
+                    <tr><td><span class="hiw-swatch hiw-swatch-unseen"></span> Unseen</td><td>Never reviewed (State = New)</td></tr>
+                    <tr><td><span class="hiw-swatch hiw-swatch-learning"></span> Learning</td><td>Being drilled this session, not yet graduated</td></tr>
+                    <tr><td><span class="hiw-swatch hiw-swatch-young"></span> Young</td><td>Graduated, interval under 21 days</td></tr>
+                    <tr><td><span class="hiw-swatch hiw-swatch-mature"></span> Mature</td><td>Graduated, interval 21 days or more — durably learned</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <h3 class="h5 mt-4">The rest of the progress card</h3>
+        <dl class="row">
+            <dt class="col-sm-3">Overdue</dt>
+            <dd class="col-sm-9">
+                A card is overdue once its due date has passed and you haven't reviewed it yet. Remember the
+                4am rollover from the scheduling section — "today" runs later than midnight.
+            </dd>
+
+            <dt class="col-sm-3">Leeches</dt>
+            <dd class="col-sm-9">
+                A card with 8 or more lapses — Anki's own threshold. Averaging it into Mastery would bury the
+                one thing worth acting on, so it gets listed by name instead: usually the fix is rewriting or
+                splitting the card, not reviewing it harder.
+            </dd>
+
+            <dt class="col-sm-3">30-day retention</dt>
+            <dd class="col-sm-9">
+                The share of graded reviews in the last 30 days that weren't "Again," straight from your
+                review history. This is the honesty check on Mastery: Mastery is an average across every card
+                in a set, so it can keep drifting upward from your successes even while a real chunk of your
+                daily reviews are failing. Retention answers a narrower, more direct question — of the
+                reviews you actually did, how many did you get right? — and it's the only one of these numbers
+                that comes from what actually happened rather than from where a card currently sits.
+            </dd>
+
+            <dt class="col-sm-3">Readiness forecast</dt>
+            <dd class="col-sm-9">
+                Shown against an assignment's due date on the home page: of the cards in that course, how many
+                are already scheduled to stay durable through that date without another review, versus how
+                many still need at least one more successful review before then. It's a projection under
+                "if you keep up your reviews" — never a promise.
+            </dd>
+        </dl>
+    </section>
+
+    <section id="future" class="mb-4">
+        <h2>Why this can change later</h2>
+        <p>
+            SM-2 is deliberately kept behind a seam (<code>IScheduler</code>) so it can be swapped for a
+            newer algorithm — most likely <strong>FSRS</strong>, a more recent model that fits its intervals
+            to each person's actual memory rather than one fixed ease dial — without disturbing anything
+            downstream.
+        </p>
+        <p class="mb-0">
+            That's why Mastery and Recall are built only from a card's interval, lapse count, state, and
+            review history — never from the ease factor above, which is specific to SM-2 and won't exist once
+            it's replaced. The numbers on your deck and course pages will keep meaning the same thing before
+            and after that swap.
+        </p>
+    </section>
+
+</div>
+
+@code {
+    private ElementReference _pageRef;
+    private IJSObjectReference? _mathJs;
+    private bool _mathRendered;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_mathRendered)
+            return;
+        try
+        {
+            _mathJs ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            await _mathJs.InvokeVoidAsync("renderMath", _pageRef);
+            _mathRendered = true;
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+        {
+            // Retried on the next render; nothing to clean up.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // Circuit already gone; nothing to clean up client-side.
+        }
+    }
+
+    /// <summary>
+    /// The three-review overview diagram in the pedagogy section. Uses the exact
+    /// RecallNow formula (0.9^fraction-of-interval-elapsed) for each segment, so the curve
+    /// is a real illustration of the math, not an artist's impression of one.
+    /// </summary>
+    private static string SpacingCurveSvg()
+    {
+        double[] intervals = [1, 6, 15];
+        const int width = 620, height = 200, padL = 42, padR = 16, padT = 16, padB = 30;
+        const double pctMin = 85, pctMax = 100;
+        var totalDays = intervals.Sum();
+        var plotW = width - padL - padR;
+        var plotH = height - padT - padB;
+
+        double X(double day) => padL + day / totalDays * plotW;
+        double Y(double pct) => padT + (pctMax - pct) / (pctMax - pctMin) * plotH;
+
+        var curves = new List<string>();
+        var markers = new List<string> { $"<circle cx='{X(0):0.#}' cy='{Y(100):0.#}' r='4' class='hiw-dot hiw-dot-review' />" };
+        var dayCursor = 0.0;
+
+        foreach (var interval in intervals)
+        {
+            var pts = new List<string>();
+            for (var i = 0; i <= 40; i++)
+            {
+                var frac = i / 40.0;
+                var day = dayCursor + frac * interval;
+                var pct = 100 * Math.Pow(0.9, frac);
+                pts.Add($"{X(day):0.##},{Y(pct):0.##}");
+            }
+            curves.Add($"<polyline points='{string.Join(' ', pts)}' class='hiw-curve' />");
+
+            var reviewDay = dayCursor + interval;
+            curves.Add($"<line x1='{X(reviewDay):0.#}' y1='{Y(90):0.#}' x2='{X(reviewDay):0.#}' y2='{Y(100):0.#}' class='hiw-boost' />");
+            markers.Add($"<circle cx='{X(reviewDay):0.#}' cy='{Y(90):0.#}' r='4' class='hiw-dot' />");
+            markers.Add($"<circle cx='{X(reviewDay):0.#}' cy='{Y(100):0.#}' r='4' class='hiw-dot hiw-dot-review' />");
+
+            dayCursor = reviewDay;
+        }
+
+        var guideY = Y(90);
+        var guide = $"<line x1='{padL}' y1='{guideY:0.#}' x2='{width - padR}' y2='{guideY:0.#}' class='hiw-guide' />";
+        var guideLabel = $"<text x='{width - padR}' y='{guideY - 6:0.#}' text-anchor='end' class='hiw-label'>~90% — right when each review is due</text>";
+
+        var axisLabels = new[]
+        {
+            $"<text x='{padL}' y='{height - 6}' class='hiw-label'>Day 0</text>",
+            $"<text x='{X(1):0.#}' y='{height - 6}' text-anchor='middle' class='hiw-label'>1</text>",
+            $"<text x='{X(7):0.#}' y='{height - 6}' text-anchor='middle' class='hiw-label'>7</text>",
+            $"<text x='{X(22):0.#}' y='{height - 6}' text-anchor='end' class='hiw-label'>22</text>",
+        };
+
+        return $"""
+            <svg viewBox="0 0 {width} {height}" width="100%" height="{height}" class="hiw-svg" role="img"
+                 aria-label="Recall percentage over three successive reviews, dropping toward 90% then resetting, with the gap between reviews growing each time.">
+                {guide}
+                {guideLabel}
+                {string.Join("\n", curves)}
+                {string.Join("\n", markers)}
+                {string.Join("\n", axisLabels)}
+            </svg>
+            """;
+    }
+
+    /// <summary>Zooms into the single 15-day interval from the worked table, for the RecallNow section.</summary>
+    private static string RecallZoomSvg()
+    {
+        const double interval = 15;
+        const int width = 560, height = 190, padL = 20, padR = 20, padT = 16, padB = 36;
+        const double pctMin = 75, pctMax = 100, maxElapsed = 30;
+        var plotW = width - padL - padR;
+        var plotH = height - padT - padB;
+
+        double X(double elapsed) => padL + elapsed / maxElapsed * plotW;
+        double Y(double pct) => padT + (pctMax - pct) / (pctMax - pctMin) * plotH;
+
+        var pts = new List<string>();
+        for (var i = 0; i <= 60; i++)
+        {
+            var elapsed = i / 60.0 * maxElapsed;
+            var pct = 100 * Math.Pow(0.9, elapsed / interval);
+            pts.Add($"{X(elapsed):0.##},{Y(pct):0.##}");
+        }
+        var curve = $"<polyline points='{string.Join(' ', pts)}' class='hiw-curve' />";
+
+        var guideY = Y(90);
+        var guide = $"<line x1='{padL}' y1='{guideY:0.#}' x2='{width - padR}' y2='{guideY:0.#}' class='hiw-guide' />";
+        var guideLabel = $"<text x='{padL}' y='{guideY - 6:0.#}' class='hiw-label'>target: 90%</text>";
+
+        (double elapsed, double pct, string label, string anchor)[] marks =
+        [
+            (0, 100, "just reviewed", "start"),
+            (15, 90, "on schedule — day 15", "middle"),
+            (30, 81, "2× late — day 30", "end"),
+        ];
+
+        var markers = new List<string>();
+        foreach (var (elapsed, pct, label, anchor) in marks)
+        {
+            markers.Add($"<circle cx='{X(elapsed):0.#}' cy='{Y(pct):0.#}' r='4' class='hiw-dot hiw-dot-review' />");
+            markers.Add($"<text x='{X(elapsed):0.#}' y='{Y(pct) - 10:0.#}' text-anchor='{anchor}' class='hiw-label'>{pct:0}%</text>");
+            markers.Add($"<text x='{X(elapsed):0.#}' y='{height - 6}' text-anchor='{anchor}' class='hiw-label hiw-label-sub'>{label}</text>");
+        }
+
+        return $"""
+            <svg viewBox="0 0 {width} {height}" width="100%" height="{height}" class="hiw-svg" role="img"
+                 aria-label="Recall probability decaying from 100% to 81% over the 30 days following a review, crossing 90% at day 15.">
+                {guide}
+                {guideLabel}
+                {curve}
+                {string.Join("\n", markers)}
+            </svg>
+            """;
+    }
+}

@@ -106,3 +106,52 @@ h1:focus {
 .katex-display {
     direction: ltr;
 }
+
+/*
+ * HowItWorks.razor's two diagrams are injected via MarkupString (built as plain SVG strings
+ * server-side, same pattern as DeckDetail's trend sparkline), so — like .md-content above —
+ * they never carry that component's CSS-isolation attribute. Global is the only way to reach them.
+ */
+.hiw-svg {
+    display: block;
+    max-width: 100%;
+    margin: 0.75rem 0;
+}
+
+.hiw-curve {
+    fill: none;
+    stroke: #1b6ec2;
+    stroke-width: 2.5;
+    stroke-linejoin: round;
+}
+
+.hiw-boost {
+    stroke: #2e7d32;
+    stroke-width: 1.5;
+    stroke-dasharray: 3 3;
+}
+
+.hiw-guide {
+    stroke: #adb5bd;
+    stroke-width: 1;
+    stroke-dasharray: 4 3;
+}
+
+.hiw-dot {
+    fill: #ffb74d;
+    stroke: #fff;
+    stroke-width: 1;
+}
+
+.hiw-dot-review {
+    fill: #2e7d32;
+}
+
+.hiw-label {
+    fill: #6c757d;
+    font-size: 10.5px;
+}
+
+.hiw-label-sub {
+    font-size: 9.5px;
+}

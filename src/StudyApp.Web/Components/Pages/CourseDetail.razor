@@ -82,7 +82,10 @@ else
                 <div class="card-body py-2">
                     <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-1">
                         <span class="small text-muted">Course mastery</span>
-                        <span class="fw-semibold">@Pct(cp.Mastery)</span>
+                        <span class="d-flex align-items-center gap-2">
+                            <span class="fw-semibold">@Pct(cp.Mastery)</span>
+                            <a href="how-it-works#progress" class="small">How is this calculated?</a>
+                        </span>
                     </div>
                     <ProgressBar Report="cp" />
                 </div>
