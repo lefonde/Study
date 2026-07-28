@@ -110,6 +110,9 @@ public class JobRunner(
                 case JobKind.GenerateCards:
                     await scope.ServiceProvider.GetRequiredService<CardGenerationService>().RunAsync(job, ct);
                     break;
+                case JobKind.MapCourse:
+                    await scope.ServiceProvider.GetRequiredService<CourseMapService>().RunAsync(job, ct);
+                    break;
             }
         }
         catch (Exception ex)

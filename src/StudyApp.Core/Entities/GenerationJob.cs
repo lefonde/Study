@@ -4,6 +4,8 @@ public enum JobKind
 {
     Ingest = 0,
     GenerateCards = 1,
+    /// <summary>Course-scoped, so it carries no MaterialId — it reads every extract at once.</summary>
+    MapCourse = 2,
 }
 
 public enum JobStatus

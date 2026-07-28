@@ -43,6 +43,36 @@ public class AiJobService(
     }
 
     /// <summary>
+    /// Queues a course-scoped job — one with no material of its own, because it reads all of them.
+    /// Refuses a duplicate while one is in flight: mapping is the kind of run it's easy to fire
+    /// twice by accident and pointless to pay for twice.
+    /// </summary>
+    public async Task<Guid> QueueCourseJobAsync(Guid courseId, JobKind kind, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var alreadyRunning = await db.GenerationJobs.AnyAsync(
+            j => j.CourseId == courseId && j.Kind == kind
+                 && (j.Status == JobStatus.Queued || j.Status == JobStatus.Running), ct);
+        if (alreadyRunning)
+            throw new InvalidOperationException("That run is already in progress for this course.");
+
+        var job = new GenerationJob
+        {
+            CourseId = courseId,
+            MaterialId = null,
+            Kind = kind,
+            Status = JobStatus.Queued,
+            Model = options.Model,
+        };
+        db.GenerationJobs.Add(job);
+        await db.SaveChangesAsync(ct);
+
+        await queue.EnqueueAsync(job.Id, ct);
+        return job.Id;
+    }
+
+    /// <summary>
     /// Materials in this course that haven't been ingested yet — the scope of "Ingest all", and
     /// the basis of the estimate shown before it runs. Failed materials are included: a failure
     /// is usually transient (a timeout, an oversized file) and retrying is the point.

@@ -35,6 +35,25 @@ public record GeneratedCard(
 public record GenerationResult(
     [property: JsonPropertyName("cards")] List<GeneratedCard> Cards);
 
+public record MappedSource(
+    [property: JsonPropertyName("materialRef")] string MaterialRef,
+    [property: JsonPropertyName("sourceReference")] string? SourceReference,
+    [property: JsonPropertyName("mention")] string Mention);
+
+public record MappedProposal(
+    [property: JsonPropertyName("kind")] string Kind,
+    [property: JsonPropertyName("topicRef")] string? TopicRef,
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("importance")] string Importance,
+    [property: JsonPropertyName("reason")] string Reason,
+    [property: JsonPropertyName("mergeIntoRef")] string? MergeIntoRef,
+    [property: JsonPropertyName("sources")] List<MappedSource> Sources);
+
+public record MapResult(
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("proposals")] List<MappedProposal> Proposals);
+
 /// <summary>
 /// All Anthropic API access. Two calls, matching the two pipeline stages:
 /// <see cref="ExtractAsync"/> reads an original file with vision (expensive, once per
@@ -96,6 +115,93 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
           the source (format it as "p. 14"). Never invent a page number.
         - rationale: one short clause on why this is worth memorising.
         - Prefer what is definitional, formula-based, or examinable over incidental detail.
+        """;
+
+    private const string MappingSystemPrompt = """
+        You maintain a map of what a university course covers and what matters in it.
+
+        You are REVISING an existing map, not writing a new one. The current topics are supplied
+        with short refs (T1, T2…). Anything that survives must keep its exact existing name, so
+        that the student's cards, notes and decisions stay attached to it. Renaming a topic
+        silently destroys those links.
+
+        Propose one change per entry:
+        - add       — a concept genuinely absent from the current map. Never re-add something
+                      already listed under any wording; if the wording should change, that is a
+                      merge, not an add.
+        - reweight  — an existing topic whose importance the new material changes. Say what
+                      changed it.
+        - merge     — two entries that are the same concept. topicRef is absorbed into
+                      mergeIntoRef; keep the better-established name as the survivor.
+        - retire    — no material supports this any more.
+
+        If nothing changed, return an empty proposals list. That is a valid and useful answer —
+        do not invent churn to look productive.
+
+        IMPORTANCE is judged from what the course ASSESSES, not from how much text covers it.
+        Each material carries a weight saying how strongly that kind of material signals what
+        matters in THIS course; a course examined by one final and a course graded on weekly
+        assignments treat the same textbook very differently. Respect those weights over your own
+        assumptions about how courses usually work.
+        - core        — assessed in high-weight material, or a prerequisite for something that is.
+        - supporting  — taught and needed to understand core topics, but not itself assessed.
+        - peripheral  — mentioned, background, or an aside.
+
+        reason: cite the evidence, naming the material and location — "assessed in Maman 11 Q3",
+        not "seems important". A reason that cannot be checked is worthless to the student.
+
+        sources: every material that evidences the topic, using its ref (M1, M2…).
+        mention = assessed (a question tests it) | defined (it is taught or defined here) |
+        referenced (mentioned in passing).
+
+        Other rules:
+        - Use the course's own language. Never translate a Hebrew topic into English.
+        - Name topics as concepts ("Banker's algorithm"), not as document headings
+          ("Section 3.2") and not as questions.
+        - Mathematics in names or summaries follows the same rule as elsewhere: LaTeX between
+          plain $ delimiters, and never right-to-left text inside them.
+        - Only use refs that appear in the input. Never invent one.
+        """;
+
+    private static readonly string MappingSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string", "description": "One line: what changed in this revision and why." },
+            "proposals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": { "type": "string", "enum": ["add", "reweight", "merge", "retire"] },
+                  "topicRef": { "type": "string", "description": "Existing topic ref (T1). Empty for add." },
+                  "name": { "type": "string" },
+                  "summary": { "type": "string" },
+                  "importance": { "type": "string", "enum": ["core", "supporting", "peripheral"] },
+                  "reason": { "type": "string" },
+                  "mergeIntoRef": { "type": "string", "description": "Surviving topic ref for a merge. Empty otherwise." },
+                  "sources": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "materialRef": { "type": "string" },
+                        "sourceReference": { "type": "string" },
+                        "mention": { "type": "string", "enum": ["assessed", "defined", "referenced"] }
+                      },
+                      "required": ["materialRef", "sourceReference", "mention"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["kind", "topicRef", "name", "summary", "importance", "reason", "mergeIntoRef", "sources"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["summary", "proposals"],
+          "additionalProperties": false
+        }
         """;
 
     private static readonly string ExtractionSchema = """
@@ -250,6 +356,51 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         };
 
         return await StreamJsonAsync<GenerationResult>(parameters, ct);
+    }
+
+    /// <summary>
+    /// Stage 2b: revise the course's topic map from its extracts.
+    ///
+    /// Text-only like generation, and deliberately cheap enough to re-run whenever material is
+    /// added — that is the whole premise of a map that keeps up with the course rather than one
+    /// snapshot taken when it was first uploaded.
+    /// </summary>
+    public async Task<AiResult<MapResult>> MapCourseAsync(
+        string courseName,
+        string weightProfile,
+        string currentTopics,
+        string materialBundle,
+        CancellationToken ct = default)
+    {
+        var prompt = new StringBuilder();
+        prompt.AppendLine($"# Course: {courseName}");
+        prompt.AppendLine();
+        prompt.AppendLine("## How much each kind of material counts in this course");
+        prompt.AppendLine(weightProfile);
+        prompt.AppendLine();
+        prompt.AppendLine("## Current map");
+        prompt.AppendLine(currentTopics);
+        prompt.AppendLine();
+        prompt.AppendLine("## Materials");
+        prompt.AppendLine(materialBundle);
+
+        var parameters = new MessageCreateParams
+        {
+            Model = options.Model,
+            MaxTokens = 32000,
+            System = new List<TextBlockParam>
+            {
+                // Identical on every re-map of every course, so it caches across runs.
+                new() { Text = MappingSystemPrompt, CacheControl = new CacheControlEphemeral() },
+            },
+            OutputConfig = new OutputConfig
+            {
+                Format = new JsonOutputFormat { Schema = ParseSchema(MappingSchema) },
+            },
+            Messages = [new() { Role = Role.User, Content = prompt.ToString() }],
+        };
+
+        return await StreamJsonAsync<MapResult>(parameters, ct);
     }
 
     /// <summary>

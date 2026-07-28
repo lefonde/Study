@@ -15,6 +15,10 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<CardSuggestion> CardSuggestions => Set<CardSuggestion>();
     public DbSet<GenerationJob> GenerationJobs => Set<GenerationJob>();
     public DbSet<ProgressSnapshot> ProgressSnapshots => Set<ProgressSnapshot>();
+    public DbSet<CourseTopic> CourseTopics => Set<CourseTopic>();
+    public DbSet<TopicSource> TopicSources => Set<TopicSource>();
+    public DbSet<CourseMapRevision> CourseMapRevisions => Set<CourseMapRevision>();
+    public DbSet<TopicProposal> TopicProposals => Set<TopicProposal>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,6 +30,14 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         modelBuilder.Entity<MaterialExtract>().HasQueryFilter(e => !e.IsDeleted);
         modelBuilder.Entity<CardSuggestion>().HasQueryFilter(s => !s.IsDeleted);
         modelBuilder.Entity<GenerationJob>().HasQueryFilter(j => !j.IsDeleted);
+        modelBuilder.Entity<CourseTopic>().HasQueryFilter(t => !t.IsDeleted);
+        // A source is a claim that some material evidences a topic; if either end is soft-deleted
+        // the claim no longer holds, so the row stops counting rather than lingering as evidence
+        // from a file the user removed.
+        modelBuilder.Entity<TopicSource>()
+            .HasQueryFilter(s => !s.Topic!.IsDeleted && !s.Material!.IsDeleted);
+        modelBuilder.Entity<CourseMapRevision>().HasQueryFilter(r => !r.IsDeleted);
+        modelBuilder.Entity<TopicProposal>().HasQueryFilter(p => !p.IsDeleted);
 
         modelBuilder.Entity<Deck>()
             .HasOne(d => d.Course)
@@ -161,6 +173,62 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasForeignKey(s => s.CourseId)
             .OnDelete(DeleteBehavior.Cascade);
 
+        // --- Course map ---
+
+        modelBuilder.Entity<CourseTopic>()
+            .HasOne(t => t.Course)
+            .WithMany()
+            .HasForeignKey(t => t.CourseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // SetNull like every other UnitId: deleting a chapter must not delete the topics filed
+        // under it, only stop attributing them to it.
+        modelBuilder.Entity<CourseTopic>()
+            .HasOne(t => t.Unit)
+            .WithMany()
+            .HasForeignKey(t => t.UnitId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // A source is meaningless without its topic, so it goes with it.
+        modelBuilder.Entity<TopicSource>()
+            .HasOne(s => s.Topic)
+            .WithMany(t => t.Sources)
+            .HasForeignKey(s => s.CourseTopicId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Deleting a material removes the claim that it evidences a topic — but not the topic,
+        // which other materials may still support.
+        modelBuilder.Entity<TopicSource>()
+            .HasOne(s => s.Material)
+            .WithMany()
+            .HasForeignKey(s => s.MaterialId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<CourseMapRevision>()
+            .HasOne(r => r.Course)
+            .WithMany()
+            .HasForeignKey(r => r.CourseId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<TopicProposal>()
+            .HasOne(p => p.Revision)
+            .WithMany(r => r.Proposals)
+            .HasForeignKey(p => p.RevisionId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Provenance, not ownership: a proposal to change a topic must survive long enough to be
+        // reviewed even if that topic is removed meanwhile — MapRevisionPolicy then blocks it
+        // with a reason rather than the row vanishing unexplained.
+        modelBuilder.Entity<TopicProposal>()
+            .HasOne(p => p.Topic)
+            .WithMany()
+            .HasForeignKey(p => p.CourseTopicId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        // Written with the proposal, read once when applying, never queried alone — unlike the
+        // TopicSource rows it becomes.
+        modelBuilder.Entity<TopicProposal>().OwnsMany(p => p.Sources, b => b.ToJson());
+
         modelBuilder.Entity<Card>().HasIndex(c => new { c.DeckId, c.Due });
         modelBuilder.Entity<ReviewLog>().HasIndex(r => r.ReviewedAt);
         modelBuilder.Entity<CourseUnit>().HasIndex(u => new { u.CourseId, u.ParentId, u.Order });
@@ -174,5 +242,12 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         // One capture per deck per day — the idempotency guarantee the capture job relies on.
         modelBuilder.Entity<ProgressSnapshot>().HasIndex(s => new { s.DeckId, s.CapturedOn }).IsUnique();
         modelBuilder.Entity<ProgressSnapshot>().HasIndex(s => new { s.CourseId, s.CapturedOn });
+        modelBuilder.Entity<CourseTopic>().HasIndex(t => new { t.CourseId, t.Importance });
+        modelBuilder.Entity<CourseTopic>().HasIndex(t => t.UnitId);
+        // The reverse lookup the study plan is built on: which topics does this assignment assess?
+        modelBuilder.Entity<TopicSource>().HasIndex(s => new { s.MaterialId, s.Mention });
+        modelBuilder.Entity<TopicSource>().HasIndex(s => s.CourseTopicId);
+        // The Map tab's first question on every load: is a revision waiting for review?
+        modelBuilder.Entity<CourseMapRevision>().HasIndex(r => new { r.CourseId, r.Status });
     }
 }

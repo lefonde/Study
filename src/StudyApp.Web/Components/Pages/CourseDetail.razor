@@ -7,6 +7,7 @@
 @inject ProgressService ProgressService
 @inject AiOptions AiOptions
 @inject AiJobService AiJobService
+@inject CourseMapService CourseMapService
 @inject SuggestionService SuggestionService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -56,6 +57,17 @@ else
         <li class="nav-item">
             <button class="nav-link @(_activeTab == "materials" ? "active" : "")" @onclick=@(() => _activeTab = "materials")>
                 Materials
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(_activeTab == "map" ? "active" : "")" @onclick=@(() => _activeTab = "map")>
+                Map
+                @if (_pendingRevision is { } rev && rev.Proposals.Any(p => p.Status == ProposalStatus.Pending))
+                {
+                    <span class="badge text-bg-warning ms-1">
+                        @rev.Proposals.Count(p => p.Status == ProposalStatus.Pending)
+                    </span>
+                }
             </button>
         </li>
         <li class="nav-item">
@@ -541,6 +553,200 @@ else
             </div>
         }
     }
+    else if (_activeTab == "map")
+    {
+        <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+            <div>
+                <div class="fw-semibold">What this course covers</div>
+                <div class="text-muted small">
+                    Derived from every ingested material, weighted by what the course is graded on.
+                    Nothing here changes until you approve it.
+                </div>
+            </div>
+            @if (AiOptions.IsConfigured)
+            {
+                <button class="btn btn-outline-primary" disabled="@_hasActiveJobs" @onclick="MapCourseAsync">
+                    @(_topics.Count == 0 ? "✨ Map this course" : "✨ Re-map with new material")
+                </button>
+            }
+        </div>
+
+        @if (_jobError is not null)
+        {
+            <div class="alert alert-danger">@_jobError</div>
+        }
+
+        @if (_unmappedMaterialCount > 0)
+        {
+            <div class="alert alert-warning py-2">
+                @_unmappedMaterialCount material@(_unmappedMaterialCount == 1 ? " isn't" : "s aren't")
+                ingested yet, so the map may be incomplete — ingest from the
+                <button class="btn btn-link p-0 align-baseline" @onclick=@(() => _activeTab = "materials")>Materials tab</button>
+                first.
+            </div>
+        }
+
+        @if (_pendingRevision is { } revision && revision.Proposals.Any(p => p.Status == ProposalStatus.Pending))
+        {
+            var pending = revision.Proposals.Where(p => p.Status == ProposalStatus.Pending).ToList();
+            <div class="card mb-4 border-warning">
+                <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                    <span>
+                        <strong>@pending.Count proposed change@(pending.Count == 1 ? "" : "s")</strong>
+                        @if (!string.IsNullOrWhiteSpace(revision.Summary))
+                        {
+                            <span class="text-muted small ms-1">— @revision.Summary</span>
+                        }
+                    </span>
+                    <span class="d-flex gap-2">
+                        <button class="btn btn-sm btn-success" @onclick="() => AcceptAllProposalsAsync(revision.Id)">
+                            Accept all @pending.Count
+                        </button>
+                        <button class="btn btn-sm btn-outline-secondary" @onclick="() => DiscardRevisionAsync(revision.Id)">
+                            Discard
+                        </button>
+                    </span>
+                </div>
+                <ul class="list-group list-group-flush">
+                    @foreach (var proposal in pending)
+                    {
+                        <li class="list-group-item">
+                            <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                                <div class="flex-grow-1" style="min-width: 14rem;">
+                                    <span class="badge @ChangeBadge(proposal.Kind) me-1">@proposal.Kind</span>
+                                    <span class="fw-semibold" dir="auto">@proposal.ProposedName</span>
+                                    <span class="badge @ImportanceBadge(proposal.ProposedImportance) ms-1">
+                                        @proposal.ProposedImportance
+                                    </span>
+                                    @if (proposal.Kind != TopicChangeKind.Add && proposal.Topic is { } existing)
+                                    {
+                                        <span class="text-muted small ms-1">
+                                            (was @existing.Importance)
+                                        </span>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(proposal.ProposedSummary))
+                                    {
+                                        <div class="small text-muted" dir="auto">@proposal.ProposedSummary</div>
+                                    }
+                                    @if (!string.IsNullOrWhiteSpace(proposal.Reason))
+                                    {
+                                        <div class="small fst-italic" dir="auto">@proposal.Reason</div>
+                                    }
+                                </div>
+                                <span class="text-nowrap">
+                                    <button class="btn btn-sm btn-success me-1" @onclick="() => AcceptProposalAsync(proposal.Id)">
+                                        ✓ Accept
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => RejectProposalAsync(proposal.Id)">
+                                        ✕ Reject
+                                    </button>
+                                </span>
+                            </div>
+                        </li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @if (_blockedReasons.Count > 0)
+        {
+            <div class="alert alert-secondary">
+                <strong>Some changes were refused to protect your decisions:</strong>
+                <ul class="mb-0 small mt-1">
+                    @foreach (var reason in _blockedReasons.Take(5))
+                    {
+                        <li>@reason</li>
+                    }
+                </ul>
+            </div>
+        }
+
+        @if (_topics.Count == 0)
+        {
+            <p class="text-muted">
+                No topics yet.
+                @if (!AiOptions.IsConfigured)
+                {
+                    <span>Set an Anthropic key in <a href="settings">Settings</a> to map this course.</span>
+                }
+                else
+                {
+                    <span>Ingest some material, then map the course to see what it covers.</span>
+                }
+            </p>
+        }
+        else
+        {
+            <div class="d-flex gap-3 mb-2 small text-muted">
+                <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Core)</strong> core</span>
+                <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Supporting)</strong> supporting</span>
+                <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Peripheral)</strong> peripheral</span>
+            </div>
+
+            <div class="list-group">
+                @foreach (var topic in _topics)
+                {
+                    <div class="list-group-item">
+                        <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
+                            <div class="flex-grow-1" style="min-width: 14rem;">
+                                <span class="badge @ImportanceBadge(topic.Importance) me-1">@topic.Importance</span>
+                                <span class="fw-semibold" dir="auto">@topic.Name</span>
+                                @if (topic.ImportancePinned)
+                                {
+                                    <span class="badge text-bg-light border ms-1" title="Re-mapping will not change this">📌 pinned</span>
+                                }
+                                @if (topic.PreviousImportance is { } was && was != topic.Importance)
+                                {
+                                    <span class="badge text-bg-info ms-1" title="Changed by a recent revision">
+                                        @was → @topic.Importance
+                                    </span>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(topic.Summary))
+                                {
+                                    <div class="small text-muted" dir="auto">@topic.Summary</div>
+                                }
+                                @if (!string.IsNullOrWhiteSpace(topic.ImportanceReason))
+                                {
+                                    <div class="small fst-italic" dir="auto">@topic.ImportanceReason</div>
+                                }
+                                @if (topic.Sources.Count > 0)
+                                {
+                                    <div class="small text-muted mt-1">
+                                        @foreach (var source in topic.Sources.OrderByDescending(s => s.Mention).Take(4))
+                                        {
+                                            <span class="badge text-bg-light border me-1"
+                                                  title="@source.Mention in this material">
+                                                @(source.Mention == TopicMention.Assessed ? "📝 " : "")@(source.Material?.Title ?? "—")@(string.IsNullOrWhiteSpace(source.SourceReference) ? "" : $" {source.SourceReference}")
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                            </div>
+                            <span class="text-nowrap d-flex gap-1 align-items-start">
+                                <select class="form-select form-select-sm" style="width: auto;"
+                                        title="Set importance yourself — this pins it"
+                                        @onchange="e => SetTopicImportanceAsync(topic.Id, (string?)e.Value)">
+                                    @foreach (var level in new[] { TopicImportance.Core, TopicImportance.Supporting, TopicImportance.Peripheral })
+                                    {
+                                        <option value="@level" selected="@(topic.Importance == level)">@level</option>
+                                    }
+                                </select>
+                                <button class="btn btn-sm @(topic.ImportancePinned ? "btn-secondary" : "btn-outline-secondary")"
+                                        title="@(topic.ImportancePinned ? "Unpin — let re-mapping adjust this" : "Pin — re-mapping will leave this alone")"
+                                        @onclick="() => TogglePinAsync(topic.Id, !topic.ImportancePinned)">
+                                    📌
+                                </button>
+                                <button class="btn btn-sm btn-outline-danger" title="Not relevant to me"
+                                        @onclick="() => DismissTopicAsync(topic.Id)">
+                                    ✕
+                                </button>
+                            </span>
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+    }
     else if (_activeTab == "inbox")
     {
         @if (_suggestions.Count == 0)
@@ -727,6 +933,11 @@ else
 
     private PendingIngestion? _pendingIngestion;
     private bool _confirmingIngestAll;
+
+    private List<CourseTopic> _topics = [];
+    private CourseMapRevision? _pendingRevision;
+    private List<string> _blockedReasons = [];
+    private int _unmappedMaterialCount;
     private List<AssessmentWeight> _weights = [];
     private bool _editingWeights;
     private bool _weightsSaved;
@@ -814,6 +1025,9 @@ else
         _materials = await MaterialService.GetAllAsync(Id);
         _weights = await CourseService.GetAssessmentWeightsAsync(Id);
         _pendingIngestion = await AiJobService.GetPendingIngestionAsync(Id);
+        _topics = await CourseMapService.GetTopicsAsync(Id);
+        _pendingRevision = await CourseMapService.GetPendingRevisionAsync(Id);
+        _unmappedMaterialCount = _materials.Count(m => m.Status != MaterialStatus.Ingested);
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
         _spend = await AiJobService.GetSpendAsync(Id);
@@ -1093,6 +1307,83 @@ else
         {
             _uploading = false;
         }
+    }
+
+    // --- Course map ---
+
+    private static string ImportanceBadge(TopicImportance importance) => importance switch
+    {
+        TopicImportance.Core => "text-bg-danger",
+        TopicImportance.Supporting => "text-bg-primary",
+        _ => "text-bg-secondary",
+    };
+
+    private static string ChangeBadge(TopicChangeKind kind) => kind switch
+    {
+        TopicChangeKind.Add => "text-bg-success",
+        TopicChangeKind.Reweight => "text-bg-info",
+        TopicChangeKind.Merge => "text-bg-primary",
+        _ => "text-bg-secondary",
+    };
+
+    private async Task MapCourseAsync()
+    {
+        _jobError = null;
+        try
+        {
+            await AiJobService.QueueCourseJobAsync(Id, JobKind.MapCourse);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    private async Task AcceptProposalAsync(Guid proposalId)
+    {
+        _blockedReasons = [];
+        if (await CourseMapService.AcceptProposalAsync(proposalId) is { } blocked)
+            _blockedReasons = [blocked];
+        await ReloadAsync();
+    }
+
+    private async Task RejectProposalAsync(Guid proposalId)
+    {
+        await CourseMapService.RejectProposalAsync(proposalId);
+        await ReloadAsync();
+    }
+
+    private async Task AcceptAllProposalsAsync(Guid revisionId)
+    {
+        _blockedReasons = await CourseMapService.AcceptAllAsync(revisionId);
+        await ReloadAsync();
+    }
+
+    private async Task DiscardRevisionAsync(Guid revisionId)
+    {
+        await CourseMapService.DiscardRevisionAsync(revisionId);
+        await ReloadAsync();
+    }
+
+    private async Task TogglePinAsync(Guid topicId, bool pinned)
+    {
+        await CourseMapService.SetPinnedAsync(topicId, pinned);
+        await ReloadAsync();
+    }
+
+    private async Task SetTopicImportanceAsync(Guid topicId, string? value)
+    {
+        if (!Enum.TryParse<TopicImportance>(value, out var importance))
+            return;
+        await CourseMapService.SetImportanceAsync(topicId, importance);
+        await ReloadAsync();
+    }
+
+    private async Task DismissTopicAsync(Guid topicId)
+    {
+        await CourseMapService.SetDismissedAsync(topicId, true);
+        await ReloadAsync();
     }
 
     private async Task IngestAllAsync()
