@@ -33,7 +33,17 @@ Everything stateful sits under one directory, so a single backup or volume cover
 
 - Database: `studyapp.db`
 - Uploaded materials: `files/`
-- Automatic backups: `backups/` — one per day, newest 7 kept, taken at startup *before* migrations run.
+- Automatic backups: `backups/` — timestamped snapshots, taken at startup *before* migrations run
+  and every 4 hours while the app is up. Each is verified after writing; the newest 10 are kept,
+  plus the first and last of each of the last 7 days.
+
+Two details worth knowing, both learned the hard way:
+
+- Snapshots are **first-and-last per day**, not newest-per-day. A day can start healthy and end
+  damaged, and keeping only the latest would discard the good copy while retaining the broken one.
+- If a snapshot has **fewer cards than the previous one**, startup logs a loud warning. The backup
+  is still correct — it faithfully recorded what was there — but that is exactly the moment to
+  intervene, before retention ages out the copies that still hold the data.
 
 That directory defaults to `%LOCALAPPDATA%\StudyApp` and is overridden with the
 `StudyApp__DataDirectory` environment variable (the container sets it to `/data`).
@@ -169,6 +179,14 @@ assignment, $5–10 for a full textbook, well under $1 for a generation run).
 ## Roadmap (deliberately deferred)
 
 - ✅ v0.2: course structure (chapters/lessons + "you are here"), material uploads, markdown/LaTeX/RTL card rendering
-- next: AI generation of cards from materials (Claude API, server-side); importance ranking; delta updates
-- Scheduler: SM-2 today behind an `IScheduler` seam; FSRS is a drop-in swap later
-- Auth is still unbuilt — required before this holds anything you'd mind a stranger reading
+- ✅ v0.3: AI ingestion → reusable extracts → card generation into a review inbox
+- ✅ v0.4: config-gated auth (password + Google/GitHub); progress tracking (mastery/recall, rolling
+  deck → unit → course); `/how-it-works` explaining the scheduling and progress math
+- next — **the course map**: upload a course's material in bulk, ingest it all, and derive one
+  weighted model of what the course covers. Importance is driven by what the course actually
+  assesses, with per-course weights (some courses live or die by the final; others by weekly
+  assignments). The map revises itself as new material lands — and every revision is reviewed
+  before it applies. Then: coverage-aware card generation, a study plan against assignment due
+  dates, and practice exams after that.
+- Scheduler: SM-2 today behind an `IScheduler` seam; FSRS is a drop-in swap later — though FSRS
+  fits itself to your review history, so it only starts paying off once there's a real one.

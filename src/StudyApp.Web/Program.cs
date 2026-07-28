@@ -178,6 +178,9 @@ builder.Services.AddScoped<AiJobService>();
 builder.Services.AddScoped<SuggestionService>();
 builder.Services.AddHostedService<JobRunner>();
 
+// The startup backup below only protects what existed at boot; this covers the session itself.
+builder.Services.AddHostedService<PeriodicBackupService>();
+
 var app = builder.Build();
 
 app.UseForwardedHeaders();
@@ -191,7 +194,8 @@ DatabaseRecovery.EnsureOpenable(
     Path.Combine(paths.DataDirectory, "quarantine"),
     loggerFactory.CreateLogger("DatabaseRecovery"));
 
-// Snapshot the user's data before any migration can touch it.
+// Snapshot the user's data before any migration can touch it. PeriodicBackupService then keeps
+// snapshotting while the app runs, so a long session isn't left protected only by this one.
 DatabaseBackup.Run(
     paths.DatabasePath,
     paths.BackupDirectory,
