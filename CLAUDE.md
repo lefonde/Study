@@ -12,6 +12,7 @@ Personal study environment (flashcards + spaced repetition first; materials, cal
 ## Conventions
 
 - Data access: `IDbContextFactory<StudyDbContext>` per operation; never inject `StudyDbContext` directly (Blazor Server).
+- **Any raw `SqliteConnection` opened outside EF must `SqliteConnection.ClearPool(connection)` in a `finally`, not just on the success path.** `Dispose()` returns the native handle to Microsoft.Data.Sqlite's pool instead of closing it, so the process keeps the `-wal` file open. This silently disabled `DatabaseRecovery`: its `quick_check` probe *throws* on a corrupt database (the case it exists for), skipping a success-path-only `ClearPool`, so the very next `File.Move` of the `-wal` failed with "used by another process" on every retry and the app could never start.
 - Time: always through injected `TimeProvider` (never `DateTime.Now/UtcNow` in domain logic). "Due" semantics live only in `DuePolicy` — study day rolls over at 04:00 local.
 - Soft deletes (`IsDeleted` + global query filters) everywhere; `CreatedAt/UpdatedAt` maintained by `TimestampInterceptor` — never set manually.
 - Scheduling changes go through `IScheduler`. FSRS should replace `Sm2Scheduler` behind that interface, never inline in UI/services.

@@ -79,16 +79,15 @@ public static class DatabaseRecovery
 
     private static bool CanOpen(string dbPath, out Exception? error)
     {
+        using var connection = new SqliteConnection($"Data Source={dbPath}");
         try
         {
-            using var connection = new SqliteConnection($"Data Source={dbPath}");
             connection.Open();
             using var command = connection.CreateCommand();
             // quick_check is the cheap structural probe; a full integrity_check would read
             // every page and slow every single startup for no extra benefit here.
             command.CommandText = "PRAGMA quick_check";
             var result = command.ExecuteScalar() as string;
-            SqliteConnection.ClearPool(connection);
             if (result == "ok")
             {
                 error = null;
@@ -101,6 +100,15 @@ public static class DatabaseRecovery
         {
             error = ex;
             return false;
+        }
+        finally
+        {
+            // Dispose() returns the native handle to Microsoft.Data.Sqlite's connection pool
+            // rather than closing it — including on the exception path above, which is the
+            // common case here (a malformed database throws instead of returning quick_check's
+            // result). Without clearing the pool, this process keeps its own handle on the -wal
+            // file, so the File.Move below fails with "used by another process" on every retry.
+            SqliteConnection.ClearPool(connection);
         }
     }
 }
