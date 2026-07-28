@@ -78,16 +78,53 @@ Two constraints that are easy to get wrong:
 - **The data directory must be a mounted volume.** Without `[mounts]`, every redeploy starts
   from an empty database and loses all uploaded files.
 
-Set a password and an API key on the deployment:
+Set a sign-in method and an API key on the deployment:
 
 ```bash
 fly secrets set StudyApp__Password=... StudyApp__Anthropic__ApiKey=sk-ant-...
 ```
 
-> **Set `StudyApp__Password` on any deployment that has an API key.** Auth is off when no
-> password is configured (so local runs stay frictionless), but an open instance with a key
-> on it lets anyone who finds the URL spend real money on generation runs — not just read
-> your flashcards.
+> **Configure a sign-in method on any deployment that has an API key.** Auth is off when
+> none is configured (so local runs stay frictionless), but an open instance with a key on it
+> lets anyone who finds the URL spend real money on generation runs — not just read your
+> flashcards.
+
+## Security
+
+Authentication activates as soon as *any* sign-in method is configured; with none, the app
+runs wide open (convenient locally, never do it on a public URL).
+
+**Password.** Prefer a hash over the plaintext variable — generate one with:
+
+```bash
+dotnet run --project src/StudyApp.Web -- hash-password "your password"
+```
+
+Set the result as `StudyApp__PasswordHash` (PBKDF2-HMAC-SHA256, 600k iterations). The
+plaintext `StudyApp__Password` still works and is fine for local development.
+
+**Google / GitHub sign-in.** Handy on a phone — no password to type. Create credentials, then:
+
+```bash
+fly secrets set StudyApp__Auth__Google__ClientId=... StudyApp__Auth__Google__ClientSecret=... StudyApp__Auth__AllowedIdentities=you@gmail.com
+```
+
+- *Google*: Cloud Console → APIs & Services → Credentials → OAuth client ID (Web
+  application). Authorized redirect URIs: `https://<your-app>.fly.dev/signin-google` and
+  `http://localhost:5170/signin-google` for local testing.
+- *GitHub*: Settings → Developer settings → OAuth Apps. Callback URL:
+  `https://<your-app>.fly.dev/signin-github`.
+
+> **`StudyApp__Auth__AllowedIdentities` is mandatory with any OAuth provider** — comma
+> separated emails (Google) or usernames (GitHub). "Sign in with Google" proves who someone
+> is, not that they may enter; without an allowlist *every Google account on earth* is a
+> valid credential for your app. The app refuses to start if a provider is configured
+> without one.
+
+Also in place: brute-force rate limiting (10 sign-in attempts per 5 minutes per IP),
+antiforgery on all form posts, open-redirect protection on `ReturnUrl`, a Content-Security
+Policy plus `nosniff`/`X-Frame-Options`/`Referrer-Policy`, and Data Protection keys persisted
+to the data volume so sign-ins survive redeploys.
 
 ## AI flashcard generation
 

@@ -31,5 +31,22 @@
                 <span class="bi bi-list-nested-nav-menu" aria-hidden="true"></span> Settings
             </NavLink>
         </div>
+
+        @* Only renders when auth is switched on, so a local no-password run is unchanged. *@
+        <AuthorizeView>
+            <Authorized Context="authState">
+                <div class="nav-item px-3 mt-3 border-top pt-3">
+                    <span class="nav-link text-white-50 small">
+                        Signed in as @(authState.User.Identity?.Name ?? "you")
+                    </span>
+                    @* Plain form post, not an interactive click: sign-out clears a cookie and
+                       that can only happen on a real HTTP response, not over the circuit. *@
+                    <form method="post" action="/logout">
+                        <AntiforgeryToken />
+                        <button type="submit" class="btn btn-sm btn-outline-light ms-3 mt-1">Sign out</button>
+                    </form>
+                </div>
+            </Authorized>
+        </AuthorizeView>
     </nav>
 </div>

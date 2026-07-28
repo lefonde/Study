@@ -12,11 +12,11 @@
     <link rel="stylesheet" href="@Assets["StudyApp.Web.styles.css"]" />
     <ImportMap />
     <link rel="icon" type="image/png" href="favicon.png" />
-    <HeadOutlet @rendermode="InteractiveServer" />
+    <HeadOutlet @rendermode="RenderModeForPage" />
 </head>
 
 <body>
-    <Routes @rendermode="InteractiveServer" />
+    <Routes @rendermode="RenderModeForPage" />
     <ReconnectModal />
     <script src="@Assets["lib/katex/katex.min.js"]"></script>
     <script src="@Assets["lib/katex/auto-render.min.js"]"></script>
@@ -24,3 +24,19 @@
 </body>
 
 </html>
+
+@code {
+    [CascadingParameter] private HttpContext? HttpContext { get; set; }
+
+    /// <summary>
+    /// Sign-in must run as static server-side rendering. An interactive component lives
+    /// inside an established SignalR circuit, and by then the HTTP response headers are long
+    /// gone — so SignInAsync has no way to write the auth cookie. Rendering /login without an
+    /// interactive mode keeps it on a plain request/response where the cookie can be set.
+    /// This is the same split Microsoft's Blazor + Identity template uses.
+    /// </summary>
+    private IComponentRenderMode? RenderModeForPage =>
+        HttpContext?.Request.Path.StartsWithSegments("/login") == true
+            ? null
+            : RenderMode.InteractiveServer;
+}

@@ -1,0 +1,43 @@
+.login-shell {
+    display: grid;
+    place-items: center;
+    min-height: 100dvh;
+    padding: 1rem;
+}
+
+.login-card {
+    background: #fff;
+    border: 1px solid rgba(0, 0, 0, .08);
+    border-radius: .75rem;
+    box-shadow: 0 1px 3px rgb(0 0 0 / .12);
+    padding: 2rem;
+    width: min(23rem, 100%);
+}
+
+/* Comfortable phone tap targets — Bootstrap's default button is ~38px, under the ~44px
+   touch guideline, and this page exists to be used one-handed on a phone. */
+.login-card .btn {
+    min-height: 46px;
+}
+
+/* ::deep because <InputText> renders the <input> itself, so it carries that component's
+   scope attribute rather than this page's — the same reason MarkupString content needs it. */
+.login-card ::deep .form-control {
+    min-height: 46px;
+}
+
+.login-divider {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    margin: 1rem 0;
+    color: var(--bs-secondary-color);
+    font-size: .8125rem;
+}
+
+.login-divider::before,
+.login-divider::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid rgba(0, 0, 0, .12);
+}

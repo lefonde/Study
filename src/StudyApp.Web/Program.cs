@@ -1,8 +1,10 @@
 using System.Security.Claims;
-using System.Security.Cryptography;
+using System.Threading.RateLimiting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using StudyApp.Core.Scheduling;
 using StudyApp.Web;
@@ -10,6 +12,22 @@ using StudyApp.Web.Components;
 using StudyApp.Web.Data;
 using StudyApp.Web.Services;
 using StudyApp.Web.Services.Ai;
+
+// Utility mode: `dotnet run --project src/StudyApp.Web -- hash-password "pw"` prints a value
+// for StudyApp__PasswordHash so the plaintext secret never has to be stored anywhere.
+if (args is ["hash-password", var plaintext, ..])
+{
+    Console.WriteLine(AuthOptions.HashPassword(plaintext));
+    return;
+}
+
+// 10 sign-in attempts per 5 minutes per IP: generous for a human, useless for a brute force.
+var AuthWindow = new FixedWindowRateLimiterOptions
+{
+    PermitLimit = 10,
+    Window = TimeSpan.FromMinutes(5),
+    QueueLimit = 0,
+};
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -35,26 +53,100 @@ var paths = new StudyAppPaths(builder.Configuration);
 paths.EnsureCreated();
 builder.Services.AddSingleton(paths);
 
-// Auth turns on only when a password is configured. Running locally stays friction-free,
-// while any deployment that sets StudyApp__Password is protected — which matters far more
+// Auth turns on as soon as any sign-in method is configured. Running locally stays
+// friction-free, while any deployment that sets one is protected — which matters far more
 // now that an Anthropic API key lives on the server: an open instance doesn't just leak
 // flashcards, it lets a stranger spend real money on generation runs.
-var authPassword = builder.Configuration["StudyApp:Password"];
-var authEnabled = !string.IsNullOrWhiteSpace(authPassword);
+// Constructing this validates the configuration and throws on a dangerous combination
+// (an OAuth provider with no allowlist), so a misconfigured deployment fails to start
+// rather than coming up wide open.
+var auth = new AuthOptions(builder.Configuration);
+builder.Services.AddSingleton(auth);
+var authEnabled = auth.Enabled;
+
+// Registered unconditionally: NavMenu's <AuthorizeView> needs the cascading
+// Task<AuthenticationState> to exist even when no sign-in method is configured, or every
+// page throws. With auth off it simply resolves to an anonymous user and renders nothing.
+builder.Services.AddCascadingAuthenticationState();
+
 if (authEnabled)
 {
+    // Keys must outlive the container or every redeploy invalidates all auth cookies and
+    // silently signs the user out. The data directory is the mounted volume in production.
     builder.Services
+        .AddDataProtection()
+        .PersistKeysToFileSystem(new DirectoryInfo(Path.Combine(paths.DataDirectory, "keys")))
+        .SetApplicationName("StudyApp");
+
+    var authBuilder = builder.Services
         .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
         .AddCookie(options =>
         {
+            options.Cookie.Name = "StudyApp.Auth";
             options.LoginPath = "/login";
+            options.AccessDeniedPath = "/login";
             options.ExpireTimeSpan = TimeSpan.FromDays(30);
             options.SlidingExpiration = true;
             options.Cookie.HttpOnly = true;
             options.Cookie.SameSite = SameSiteMode.Lax;
+            // Secure flag whenever the request arrived over https. Not Always, because that
+            // would break plain-http local runs; UseForwardedHeaders means production sees
+            // the real scheme through the proxy.
+            options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
         });
+
+    if (auth.GoogleEnabled)
+    {
+        authBuilder.AddGoogle(options =>
+        {
+            options.ClientId = auth.GoogleClientId!;
+            options.ClientSecret = auth.GoogleClientSecret!;
+            options.Events.OnTicketReceived = ctx => EnforceAllowlist(ctx, "google");
+        });
+    }
+
+    if (auth.GitHubEnabled)
+    {
+        authBuilder.AddGitHub(options =>
+        {
+            options.ClientId = auth.GitHubClientId!;
+            options.ClientSecret = auth.GitHubClientSecret!;
+            // Without this GitHub returns no email, so an allowlist written as an email
+            // address could never match — only the login handle would.
+            options.Scope.Add("user:email");
+            options.Events.OnTicketReceived = ctx => EnforceAllowlist(ctx, "github");
+        });
+    }
+
     builder.Services.AddAuthorization(options => options.FallbackPolicy = options.DefaultPolicy);
-    builder.Services.AddCascadingAuthenticationState();
+
+    // Brute force protection. Without this a password is only as strong as the attacker's
+    // bandwidth. Partitioned by client IP, which is meaningful because UseForwardedHeaders
+    // runs before the limiter and restores the real caller behind the platform proxy.
+    builder.Services.AddRateLimiter(options =>
+    {
+        options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+        options.OnRejected = async (ctx, token) =>
+        {
+            ctx.HttpContext.Response.Headers.RetryAfter = "300";
+            ctx.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                .CreateLogger("Auth")
+                .LogWarning("Sign-in rate limit hit from {Ip}", ctx.HttpContext.Connection.RemoteIpAddress);
+            await ctx.HttpContext.Response.WriteAsync("Too many sign-in attempts. Try again shortly.", token);
+        };
+        options.AddPolicy("auth", context => RateLimitPartition.GetFixedWindowLimiter(
+            ClientKey(context),
+            _ => AuthWindow));
+
+        // The password form posts to a Razor component, not a minimal-API endpoint, so
+        // RequireRateLimiting can't be attached to it. A global limiter that only partitions
+        // sign-in submissions covers it while leaving every other request unthrottled.
+        options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
+            HttpMethods.IsPost(context.Request.Method)
+            && context.Request.Path.StartsWithSegments("/login")
+                ? RateLimitPartition.GetFixedWindowLimiter(ClientKey(context), _ => AuthWindow)
+                : RateLimitPartition.GetNoLimiter<string>("unthrottled"));
+    });
 }
 
 builder.Services.AddSingleton(TimeProvider.System);
@@ -121,10 +213,33 @@ app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages:
 // force_https). Redirecting here would either loop or just log "failed to determine the
 // https port" on every start.
 
+// Defence-in-depth headers on every response. CSP is the meaningful one: it caps the damage
+// any injected markup could do, complementing MarkdownRenderer's raw-HTML ban.
+app.Use(async (context, next) =>
+{
+    var headers = context.Response.Headers;
+    headers["X-Content-Type-Options"] = "nosniff";
+    headers["Referrer-Policy"] = "strict-origin-when-cross-origin";
+    headers["X-Frame-Options"] = "DENY";
+    headers["Content-Security-Policy"] =
+        "default-src 'self'; " +
+        // Blazor's boot script and ImportMap are inline; 'unsafe-inline' is the pragmatic
+        // choice over a nonce that the framework's own injected tags wouldn't carry.
+        "script-src 'self' 'unsafe-inline'; " +
+        // KaTeX positions glyphs with inline style attributes and cannot work without this.
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; font-src 'self'; " +
+        // wss: is the Blazor Server circuit.
+        "connect-src 'self' ws: wss:; " +
+        "form-action 'self'; frame-ancestors 'none'; base-uri 'self'; object-src 'none'";
+    await next();
+});
+
 if (authEnabled)
 {
     app.UseAuthentication();
     app.UseAuthorization();
+    app.UseRateLimiter();
 }
 
 app.UseAntiforgery();
@@ -134,39 +249,29 @@ app.MapStaticAssets().AllowAnonymous();
 
 if (authEnabled)
 {
-    // Login is a plain server-rendered form rather than a Blazor page: a cookie can't be
-    // written from inside an established SignalR circuit, so sign-in has to happen on a
-    // normal HTTP request/response.
-    app.MapGet("/login", (string? error) => Results.Content(LoginPage(error is not null), "text/html"))
-        .AllowAnonymous();
-
-    app.MapPost("/login", async (HttpContext http) =>
+    // Starts the OAuth dance. Anonymous (you're not signed in yet) and rate limited so the
+    // provider round-trip can't be used as an amplifier.
+    app.MapGet("/login/challenge/{provider}", (string provider, string? returnUrl) =>
     {
-        var form = await http.Request.ReadFormAsync();
-        var supplied = form["password"].ToString();
+        var scheme = provider.ToLowerInvariant() switch
+        {
+            "google" when auth.GoogleEnabled => "Google",
+            "github" when auth.GitHubEnabled => "GitHub",
+            _ => null,
+        };
+        if (scheme is null)
+            return Results.Redirect("/login?error=unknownprovider");
 
-        // Fixed-time compare so a wrong password can't be narrowed down by timing.
-        var expectedBytes = System.Text.Encoding.UTF8.GetBytes(authPassword!);
-        var suppliedBytes = System.Text.Encoding.UTF8.GetBytes(supplied);
-        var ok = expectedBytes.Length == suppliedBytes.Length
-                 && CryptographicOperations.FixedTimeEquals(expectedBytes, suppliedBytes);
-        if (!ok)
-            return Results.Redirect("/login?error=1");
-
-        var identity = new ClaimsIdentity(
-            [new Claim(ClaimTypes.Name, "Alex")], CookieAuthenticationDefaults.AuthenticationScheme);
-        await http.SignInAsync(
-            CookieAuthenticationDefaults.AuthenticationScheme,
-            new ClaimsPrincipal(identity),
-            new AuthenticationProperties { IsPersistent = true });
-        return Results.Redirect("/");
-    }).AllowAnonymous().DisableAntiforgery();
+        return Results.Challenge(
+            new AuthenticationProperties { RedirectUri = LocalRedirect(returnUrl) },
+            [scheme]);
+    }).AllowAnonymous().RequireRateLimiting("auth");
 
     app.MapPost("/logout", async (HttpContext http) =>
     {
         await http.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return Results.Redirect("/login");
-    }).DisableAntiforgery();
+    });
 }
 
 // Platform health probe: confirms the process is up *and* its data volume is reachable.
@@ -211,31 +316,50 @@ app.MapRazorComponents<App>()
 
 app.Run();
 
-// $$ raw string: interpolation is {{ }}, so the CSS's own braces stay literal.
-static string LoginPage(bool failed) => $$"""
-    <!doctype html>
-    <html lang="en"><head>
-    <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>StudyApp — Sign in</title>
-    <style>
-      body { font-family: system-ui, sans-serif; display: grid; place-items: center;
-             min-height: 100vh; margin: 0; background: #f6f7fb; }
-      form { background: #fff; padding: 2rem; border-radius: .75rem; width: min(22rem, 90vw);
-             box-shadow: 0 1px 3px rgb(0 0 0 / .12); }
-      h1 { font-size: 1.25rem; margin: 0 0 1rem; }
-      input { width: 100%; padding: .6rem; font-size: 1rem; border: 1px solid #ccc;
-              border-radius: .4rem; box-sizing: border-box; }
-      button { width: 100%; margin-top: .75rem; padding: .6rem; font-size: 1rem; border: 0;
-               border-radius: .4rem; background: #4f6df5; color: #fff; cursor: pointer; }
-      .err { color: #b3261e; font-size: .875rem; margin: 0 0 .75rem; }
-    </style></head>
-    <body>
-      <form method="post" action="/login">
-        <h1>📚 StudyApp</h1>
-        {{(failed ? "<p class=\"err\">Incorrect password.</p>" : "")}}
-        <input type="password" name="password" placeholder="Password" autofocus required
-               autocomplete="current-password">
-        <button type="submit">Sign in</button>
-      </form>
-    </body></html>
-    """;
+/// <summary>
+/// Rejects an authenticated-but-unauthorized identity. A provider only proves *who* someone
+/// is; without this check any Google or GitHub account in the world would be a valid
+/// credential for this app.
+/// </summary>
+static Task EnforceAllowlist(
+    Microsoft.AspNetCore.Authentication.TicketReceivedContext context, string provider)
+{
+    var options = context.HttpContext.RequestServices.GetRequiredService<AuthOptions>();
+    var logger = context.HttpContext.RequestServices
+        .GetRequiredService<ILoggerFactory>().CreateLogger("Auth");
+
+    var email = context.Principal?.FindFirstValue(ClaimTypes.Email);
+    var name = context.Principal?.FindFirstValue(ClaimTypes.Name);
+    // GitHub surfaces the login handle here; Google has no equivalent, hence checking several.
+    var login = context.Principal?.FindFirstValue("urn:github:login");
+
+    if (options.IsIdentityAllowed(email, login, name))
+    {
+        logger.LogInformation("Signed in via {Provider} as {Identity}", provider, email ?? login ?? name);
+        return Task.CompletedTask;
+    }
+
+    logger.LogWarning(
+        "Rejected {Provider} sign-in for {Identity} — not in StudyApp__Auth__AllowedIdentities",
+        provider, email ?? login ?? name ?? "(unknown)");
+
+    context.Fail("This account is not allowed to sign in.");
+    context.Response.Redirect("/login?error=notallowed");
+    context.HandleResponse();
+    return Task.CompletedTask;
+}
+
+/// <summary>
+/// Open-redirect guard: only ever send the browser to a path on this site. A returnUrl of
+/// "https://evil.example" would otherwise turn our sign-in into a credible phishing hop.
+/// </summary>
+/// <summary>Sign-in attempts are throttled per caller IP (accurate thanks to UseForwardedHeaders).</summary>
+static string ClientKey(HttpContext context) =>
+    context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+static string LocalRedirect(string? returnUrl) =>
+    !string.IsNullOrEmpty(returnUrl)
+    && returnUrl.StartsWith('/')
+    && !returnUrl.StartsWith("//", StringComparison.Ordinal)
+        ? returnUrl
+        : "/";

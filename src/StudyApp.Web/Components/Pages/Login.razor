@@ -1,0 +1,120 @@
+@page "/login"
+@layout BareLayout
+@* Without this the fallback authorization policy protects the login page itself, so the
+   cookie handler redirects /login -> /login forever until the URL overflows (HTTP 414). *@
+@attribute [AllowAnonymous]
+@using Microsoft.AspNetCore.Authorization
+@using System.ComponentModel.DataAnnotations
+@using Microsoft.AspNetCore.Authentication
+@using Microsoft.AspNetCore.Authentication.Cookies
+@using System.Security.Claims
+@inject AuthOptions Auth
+@inject NavigationManager Nav
+@inject ILoggerFactory LoggerFactory
+
+@* Rendered as static SSR (see App.razor): sign-in has to happen on a plain HTTP
+   request/response so the auth cookie can actually be written to the response headers. *@
+
+<PageTitle>StudyApp — Sign in</PageTitle>
+
+<div class="login-shell">
+    <div class="login-card">
+        <h1 class="h4 mb-1">📚 StudyApp</h1>
+        <p class="text-muted small mb-4">Sign in to reach your courses.</p>
+
+        @if (_message is { Length: > 0 })
+        {
+            <div class="alert alert-danger py-2 small" role="alert">@_message</div>
+        }
+
+        @if (Auth.HasPassword)
+        {
+            <EditForm Model="Input" FormName="login" OnValidSubmit="SignInWithPasswordAsync" method="post">
+                <DataAnnotationsValidator />
+                <div class="mb-2">
+                    <label class="form-label small" for="password">Password</label>
+                    <InputText id="password" type="password" class="form-control"
+                               @bind-Value="Input.Password" autocomplete="current-password" autofocus />
+                    <ValidationMessage For="() => Input.Password" class="text-danger small" />
+                </div>
+                <button class="btn btn-primary w-100" type="submit">Sign in</button>
+            </EditForm>
+        }
+
+        @if (Auth.HasPassword && Auth.AnyExternalProvider)
+        {
+            <div class="login-divider"><span>or</span></div>
+        }
+
+        @if (Auth.GoogleEnabled)
+        {
+            <a class="btn btn-outline-secondary w-100 mb-2"
+               href="@ChallengeUrl("google")">Continue with Google</a>
+        }
+        @if (Auth.GitHubEnabled)
+        {
+            <a class="btn btn-outline-secondary w-100" href="@ChallengeUrl("github")">Continue with GitHub</a>
+        }
+
+        @if (!Auth.HasPassword && !Auth.AnyExternalProvider)
+        {
+            <p class="text-muted small mb-0">No sign-in method is configured on this server.</p>
+        }
+    </div>
+</div>
+
+@code {
+    [CascadingParameter] private HttpContext HttpContext { get; set; } = default!;
+    [SupplyParameterFromForm] private LoginInput Input { get; set; } = new();
+    [SupplyParameterFromQuery] private string? ReturnUrl { get; set; }
+    [SupplyParameterFromQuery] private string? Error { get; set; }
+
+    private string? _message;
+
+    protected override void OnInitialized() => _message = Error switch
+    {
+        "notallowed" => "That account isn't permitted to sign in here.",
+        "unknownprovider" => "That sign-in method isn't enabled on this server.",
+        _ => null,
+    };
+
+    private string ChallengeUrl(string provider) =>
+        $"/login/challenge/{provider}?returnUrl={Uri.EscapeDataString(SafeReturnUrl)}";
+
+    /// <summary>Only ever redirect within this site — an absolute URL here would make sign-in a phishing hop.</summary>
+    private string SafeReturnUrl =>
+        !string.IsNullOrEmpty(ReturnUrl) && ReturnUrl.StartsWith('/') && !ReturnUrl.StartsWith("//", StringComparison.Ordinal)
+            ? ReturnUrl
+            : "/";
+
+    private async Task SignInWithPasswordAsync()
+    {
+        var logger = LoggerFactory.CreateLogger("Auth");
+
+        if (!Auth.VerifyPassword(Input.Password))
+        {
+            logger.LogWarning("Failed password sign-in from {Ip}", HttpContext.Connection.RemoteIpAddress);
+            _message = "Incorrect password.";
+            Input = new LoginInput();
+            return;
+        }
+
+        var identity = new ClaimsIdentity(
+            [new Claim(ClaimTypes.Name, "Alex")],
+            CookieAuthenticationDefaults.AuthenticationScheme);
+
+        await HttpContext.SignInAsync(
+            CookieAuthenticationDefaults.AuthenticationScheme,
+            new ClaimsPrincipal(identity),
+            new AuthenticationProperties { IsPersistent = true });
+
+        logger.LogInformation("Signed in with password from {Ip}", HttpContext.Connection.RemoteIpAddress);
+        Nav.NavigateTo(SafeReturnUrl);
+    }
+
+    private sealed class LoginInput
+    {
+        [Required(ErrorMessage = "Enter your password.")]
+        public string? Password { get; set; }
+    }
+}
