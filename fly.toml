@@ -1,47 +1,35 @@
-# Fly.io deployment. Create the app and its volume once, then `fly deploy` to ship.
+# fly.toml app configuration file generated for study-3kfyqq on 2026-07-28T08:43:58Z
 #
-#   fly launch --no-deploy --copy-config
-#   fly volumes create studyapp_data --size 1
-#   fly deploy
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
 #
-# IMPORTANT: this app must run as exactly ONE machine. It uses SQLite on a local volume,
-# and Blazor Server keeps per-user circuit state in memory — a second instance would both
-# corrupt the database and drop sessions on every other request.
 
-# App names are globally unique across all of Fly — change this if it's taken.
-app = "studyapp-lefonde"
-
-# Blazor Server round-trips EVERY click to the server over a WebSocket, so physical
-# distance to this region is directly how sluggish the UI feels. fra (Frankfurt) is the
-# closest region to Israel; see `fly platform regions` to pick another.
-primary_region = "fra"
+app = 'study-3kfyqq'
+primary_region = 'fra'
 
 [build]
 
 [env]
-  ASPNETCORE_URLS = "http://+:8080"
-  StudyApp__DataDirectory = "/data"
+  ASPNETCORE_URLS = 'http://+:8080'
+  StudyApp__DataDirectory = '/data'
+
+[[mounts]]
+  source = 'data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  # Blazor Server holds an open WebSocket per user. Stopping the machine kills every live
-  # circuit mid-session, so keep one always running rather than scaling to zero.
-  auto_stop_machines = false
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [[http_service.checks]]
-    grace_period = "20s"
-    interval = "30s"
-    method = "GET"
-    path = "/healthz"
-    timeout = "5s"
-
-[mounts]
-  source = "studyapp_data"
-  destination = "/data"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '20s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  size = "shared-cpu-1x"
-  memory = "512mb"
+  size = 'shared-cpu-1x'
+  memory = '512mb'
