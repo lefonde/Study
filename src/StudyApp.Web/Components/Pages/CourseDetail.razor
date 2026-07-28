@@ -462,11 +462,11 @@ else
                             }
                             else
                             {
-                                <div class="fw-semibold suggestion-body" dir="auto">
+                                <div class="fw-semibold suggestion-body md-content" dir="auto">
                                     @((MarkupString)MarkdownRenderer.ToHtml(suggestion.Front))
                                 </div>
                                 <hr class="my-2" />
-                                <div class="text-muted suggestion-body" dir="auto">
+                                <div class="text-muted suggestion-body md-content" dir="auto">
                                     @((MarkupString)MarkdownRenderer.ToHtml(suggestion.Back))
                                 </div>
 
@@ -525,7 +525,7 @@ else
             }
             else
             {
-                <div class="border rounded p-3 mb-2 notes-rendered" dir="auto" @ref="_notesRef">
+                <div class="border rounded p-3 mb-2 notes-rendered md-content" dir="auto" @ref="_notesRef">
                     @((MarkupString)MarkdownRenderer.ToHtml(_course.NotesMarkdown))
                 </div>
             }

@@ -81,7 +81,7 @@ else
         @if (extract.Terms.Count > 0)
         {
             <h2 class="h6">Glossary</h2>
-            <dl class="row small mb-4" dir="auto">
+            <dl class="row small mb-4 md-content" dir="auto">
                 @foreach (var term in extract.Terms)
                 {
                     <dt class="col-sm-3 text-break">@term.Term</dt>
@@ -101,7 +101,7 @@ else
                         <span class="small fw-semibold" dir="auto">@(string.IsNullOrWhiteSpace(part.Title) ? "—" : part.Title)</span>
                         <span class="badge text-bg-light">p. @part.Page</span>
                     </div>
-                    <div class="card-body py-2 extract-body" dir="auto">
+                    <div class="card-body py-2 extract-body md-content" dir="auto">
                         @((MarkupString)MarkdownRenderer.ToHtml(part.Markdown))
                     </div>
                 </div>

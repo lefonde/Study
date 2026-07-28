@@ -128,8 +128,8 @@ else
                             }
                             else
                             {
-                                <td class="text-break card-cell" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</td>
-                                <td class="text-break text-muted card-cell" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</td>
+                                <td class="text-break card-cell md-content" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</td>
+                                <td class="text-break text-muted card-cell md-content" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</td>
                                 <td>
                                     <span class="badge @StateBadge(card.State)">@card.State</span>
                                 </td>

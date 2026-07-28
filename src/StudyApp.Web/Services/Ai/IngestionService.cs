@@ -42,12 +42,12 @@ public class IngestionService(
             {
                 Page = s.Page,
                 Title = s.Title,
-                Markdown = s.Markdown,
+                Markdown = ClaudeService.NormalizeMarkdown(s.Markdown),
             })],
             Terms = [.. result.Value.Terms.Select(t => new ExtractTerm
             {
                 Term = t.Term,
-                Definition = t.Definition,
+                Definition = ClaudeService.NormalizeMarkdown(t.Definition),
             })],
             Topics = [.. result.Value.Topics],
             Model = job.Model,

@@ -58,6 +58,12 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         - Transcribe the document completely. Do not summarise, abridge, or skip content.
         - Write ALL mathematics as LaTeX: $...$ inline, $$...$$ for display. Never describe a
           formula in prose ("lambda times S" is wrong; "$\lambda \cdot \bar{S}$" is right).
+        - Write the delimiters as plain $ characters. Never escape them as \$.
+        - Put ONLY mathematical notation between the delimiters — never Hebrew or other
+          right-to-left words. Prose goes outside the math. Write
+          `נגדיר $X_i$ כמספר הקופונים`, never `$X_i = מספר הקופונים$`. Right-to-left text
+          inside a formula cannot be typeset and renders as reversed garbage, and because this
+          extraction is reused for every later step the damage would be permanent.
         - Preserve the document's original language exactly. Never translate. A Hebrew source
           stays Hebrew.
         - Transcribe handwriting as faithfully as you can. Mark a genuinely illegible word [?].
@@ -77,7 +83,12 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         - Use ONLY the supplied source text. Never introduce facts that aren't in it. If the
           source doesn't support a card, don't write that card.
         - Write in the same language as the source material.
-        - Mathematics as LaTeX: $...$ inline, $$...$$ for display.
+        - Mathematics as LaTeX: $...$ inline, $$...$$ for display. Write the delimiters as
+          plain $ characters; never escape them as \$.
+        - Put ONLY mathematical notation between the delimiters — never Hebrew or other
+          right-to-left words. Prose goes outside the math. Write
+          `מהי ההסתברות ש-$A$ מתרחש?`, never `$A = המאורע שקורה$`. Right-to-left text inside a
+          formula cannot be typeset and renders as reversed garbage.
         - One idea per card. The front is a question; the back answers it and nothing more.
         - Use the course's own terminology, supplied in the glossary, over generic synonyms.
         - Do not restate cards the student already has — a list of existing fronts is supplied.
@@ -240,6 +251,17 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
 
         return await StreamJsonAsync<GenerationResult>(parameters, ct);
     }
+
+    /// <summary>
+    /// Normalizes markdown the model produced before it is stored or rendered.
+    ///
+    /// Models sometimes emit `\$` — an artifact of escaping inside JSON string output. Markdig
+    /// reads that as a literal dollar sign rather than a math delimiter, so the formula never
+    /// becomes math: it stays raw LaTeX in the page. Belt-and-braces with the prompt rule,
+    /// because an extract is written once and reused forever.
+    /// </summary>
+    public static string NormalizeMarkdown(string? markdown) =>
+        string.IsNullOrEmpty(markdown) ? "" : markdown.Replace("\\$", "$");
 
     private static ContentBlockParam BuildSourceBlock(byte[] bytes, string mimeType)
     {

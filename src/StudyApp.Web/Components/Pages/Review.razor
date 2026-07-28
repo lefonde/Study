@@ -55,11 +55,11 @@ else
 
         <div class="card review-card mb-3">
             <div class="card-body d-flex flex-column justify-content-center" @ref="_cardBodyRef">
-                <div class="card-face text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</div>
+                <div class="card-face md-content text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Front))</div>
                 @if (_revealed)
                 {
                     <hr />
-                    <div class="card-face card-back text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</div>
+                    <div class="card-face card-back md-content text-center" dir="auto">@((MarkupString)MarkdownRenderer.ToHtml(card.Back))</div>
                 }
             </div>
         </div>

@@ -58,3 +58,51 @@ h1:focus {
 .form-floating > .form-control-plaintext:focus::placeholder, .form-floating > .form-control:focus::placeholder {
     text-align: start;
 }
+
+/*
+ * Mixed-direction rendered markdown (cards, notes, extracts, card suggestions).
+ *
+ * Global rather than component-scoped on purpose: this HTML arrives as a MarkupString, so it
+ * never carries a component's CSS-isolation attribute, and five components share these rules.
+ *
+ * Add .md-content to any element holding MarkdownRenderer output.
+ */
+.md-content {
+    text-align: start;
+}
+
+/*
+ * Each block resolves its OWN direction from its first strong character (Unicode Bidi
+ * Algorithm rules P2/P3). dir="auto" on the container only resolves once for the whole
+ * container, so a card whose first line is English would lay out its Hebrew paragraphs
+ * left-to-right. plaintext fixes direction per paragraph instead.
+ */
+.md-content :is(p, li, h1, h2, h3, h4, h5, h6, blockquote, td, th, dt, dd) {
+    unicode-bidi: plaintext;
+    /* Deliberately no text-align here: alignment is inherited so a container that centres
+       on purpose (the review card) keeps doing so. The inherited `start` keyword still
+       resolves against each paragraph's own direction, so RTL paragraphs align right. */
+}
+
+/*
+ * Mathematics is left-to-right in every language, but KaTeX ships no direction rule of its
+ * own, so inside a Hebrew paragraph every formula inherits direction: rtl and renders with
+ * its terms visually shuffled.
+ *
+ * isolate (not just direction) matters: it makes each formula a single neutral unit in the
+ * surrounding line, so it can't drag adjacent punctuation — a trailing "?" stays at the end
+ * of the Hebrew question instead of jumping to the other side.
+ *
+ * .math is Markdig's wrapper and survives even when KaTeX fails to render (e.g. RTL text
+ * inside the delimiters), so raw LaTeX stays in readable logical order rather than becoming
+ * bidi soup.
+ */
+.md-content .math,
+.katex {
+    direction: ltr;
+    unicode-bidi: isolate;
+}
+
+.katex-display {
+    direction: ltr;
+}

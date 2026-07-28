@@ -80,8 +80,8 @@ public class CardGenerationService(
             {
                 CourseId = material.CourseId,
                 BatchId = batchId,
-                Front = card.Front.Trim(),
-                Back = card.Back.Trim(),
+                Front = ClaudeService.NormalizeMarkdown(card.Front).Trim(),
+                Back = ClaudeService.NormalizeMarkdown(card.Back).Trim(),
                 UnitId = material.UnitId,
                 SourceMaterialId = material.Id,
                 SourceReference = card.SourceReference,
