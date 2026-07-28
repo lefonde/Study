@@ -266,8 +266,12 @@ else
             <div class="card-body">
                 <div class="row g-2 align-items-end">
                     <div class="col-12 col-md-4">
-                        <label class="form-label">File</label>
-                        <InputFile class="form-control" OnChange="OnFileSelected" />
+                        <label class="form-label">Files</label>
+                        <InputFile class="form-control" multiple OnChange="OnFilesSelected" />
+                        <div class="form-text">
+                            Select as many as you like — kind and unit apply to the whole batch and
+                            can be changed per file afterwards.
+                        </div>
                     </div>
                     <div class="col-6 col-md-3">
                         <label class="form-label">Kind</label>
@@ -296,11 +300,27 @@ else
                         </div>
                     }
                 </div>
-                @if (_selectedFile is not null)
+                @if (_selectedFiles.Count > 0)
                 {
-                    <div class="mt-2">
+                    <div class="mt-3">
+                        <div class="small text-muted mb-1">
+                            @_selectedFiles.Count file@(_selectedFiles.Count == 1 ? "" : "s") selected —
+                            @FormatSize(_selectedFiles.Sum(f => f.Size)) total
+                        </div>
+                        <ul class="list-unstyled small mb-2">
+                            @foreach (var file in _selectedFiles.Take(8))
+                            {
+                                <li class="text-truncate">@file.Name <span class="text-muted">@FormatSize(file.Size)</span></li>
+                            }
+                            @if (_selectedFiles.Count > 8)
+                            {
+                                <li class="text-muted">…and @(_selectedFiles.Count - 8) more</li>
+                            }
+                        </ul>
                         <button class="btn btn-primary" disabled="@_uploading" @onclick="UploadAsync">
-                            @(_uploading ? "Uploading…" : $"Upload {_selectedFile.Name}")
+                            @(_uploading
+                                ? $"Uploading {_uploadedSoFar}/{_selectedFiles.Count}…"
+                                : $"Upload {_selectedFiles.Count} file{(_selectedFiles.Count == 1 ? "" : "s")}")
                         </button>
                     </div>
                 }
@@ -318,6 +338,92 @@ else
                 Set one up in <a href="settings">Settings</a>.
             </div>
         }
+        else if (_pendingIngestion is { MaterialCount: > 0 } pending)
+        {
+            <div class="card mb-3 border-primary-subtle">
+                <div class="card-body py-3">
+                    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
+                        <div>
+                            <div class="fw-semibold">
+                                @pending.MaterialCount material@(pending.MaterialCount == 1 ? "" : "s") not yet ingested
+                            </div>
+                            <div class="text-muted small">
+                                @FormatSize(pending.TotalBytes) — estimated
+                                <strong>@AiPricing.FormatRange(AiPricing.EstimateIngestion(AiOptions.Model, pending.TotalBytes))</strong>
+                                to ingest. Rough: real cost depends on page count, and the exact
+                                figure per run appears below once each finishes.
+                            </div>
+                        </div>
+                        @if (_confirmingIngestAll)
+                        {
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-primary" @onclick="IngestAllAsync">
+                                    Yes, ingest @pending.MaterialCount
+                                </button>
+                                <button class="btn btn-outline-secondary" @onclick="() => _confirmingIngestAll = false">
+                                    Cancel
+                                </button>
+                            </div>
+                        }
+                        else
+                        {
+                            <button class="btn btn-outline-primary" @onclick="() => _confirmingIngestAll = true">
+                                ✨ Ingest all
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+
+        <div class="card mb-3">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <span>What this course is graded on</span>
+                <button class="btn btn-sm btn-outline-secondary" @onclick="ToggleWeightsEditor">
+                    @(_editingWeights ? "Close" : "Adjust")
+                </button>
+            </div>
+            @if (_editingWeights)
+            {
+                <div class="card-body">
+                    <p class="text-muted small">
+                        How strongly each kind of material signals what actually matters here. Nothing
+                        in the material itself reveals this — a course examined by one final and a
+                        course graded on weekly assignments can use the same textbook. These weights
+                        decide which topics count as core when the course is mapped.
+                    </p>
+                    @foreach (var weight in _weights)
+                    {
+                        <div class="row align-items-center g-2 mb-1">
+                            <div class="col-5 col-md-3 small">@weight.Kind</div>
+                            <div class="col-5 col-md-7">
+                                <input type="range" class="form-range" min="0" max="100" step="5"
+                                       value="@weight.Weight"
+                                       @onchange="e => SetWeight(weight.Kind, e.Value?.ToString())" />
+                            </div>
+                            <div class="col-2 text-end small text-muted">@weight.Weight</div>
+                        </div>
+                    }
+                    <div class="mt-2 d-flex gap-2">
+                        <button class="btn btn-primary btn-sm" @onclick="SaveWeightsAsync">Save</button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="ResetWeights">
+                            Reset to defaults
+                        </button>
+                        @if (_weightsSaved)
+                        {
+                            <span class="align-self-center text-success small">Saved</span>
+                        }
+                    </div>
+                </div>
+            }
+            else
+            {
+                <div class="card-body py-2 small text-muted">
+                    @string.Join(" · ", _weights.OrderByDescending(w => w.Weight).Take(4)
+                        .Select(w => $"{w.Kind} {w.Weight}"))
+                </div>
+            }
+        </div>
 
         @if (_jobError is not null)
         {
@@ -585,6 +691,12 @@ else
 
     private const long MaxFileSizeBytes = 64 * 1024 * 1024;
 
+    /// <summary>
+    /// InputFile requires an explicit cap on GetMultipleFiles and throws past it rather than
+    /// truncating, so this is high enough to take a whole course's material in one go.
+    /// </summary>
+    private const int MaxFilesPerUpload = 50;
+
     private Course? _course;
     private List<DeckStats> _deckStats = [];
     private string _activeTab = "decks";
@@ -605,12 +717,19 @@ else
     private string _renameDraft = "";
 
     private List<Material> _materials = [];
-    private IBrowserFile? _selectedFile;
+    private IReadOnlyList<IBrowserFile> _selectedFiles = [];
     private MaterialKind _uploadKind = MaterialKind.Other;
     private Guid? _uploadUnitId;
     private DateTime _uploadDueDate = DateTime.Today.AddDays(7);
     private bool _uploading;
+    private int _uploadedSoFar;
     private string? _uploadError;
+
+    private PendingIngestion? _pendingIngestion;
+    private bool _confirmingIngestAll;
+    private List<AssessmentWeight> _weights = [];
+    private bool _editingWeights;
+    private bool _weightsSaved;
 
     private List<GenerationJob> _jobs = [];
     private CourseSpend? _spend;
@@ -693,6 +812,8 @@ else
         foreach (var chapter in _chapters)
             _newLessonTitles.TryAdd(chapter.Id, "");
         _materials = await MaterialService.GetAllAsync(Id);
+        _weights = await CourseService.GetAssessmentWeightsAsync(Id);
+        _pendingIngestion = await AiJobService.GetPendingIngestionAsync(Id);
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
         _spend = await AiJobService.GetSpendAsync(Id);
@@ -910,35 +1031,113 @@ else
 
     // --- Materials ---
 
-    private void OnFileSelected(InputFileChangeEventArgs e)
+    private void OnFilesSelected(InputFileChangeEventArgs e)
     {
-        _selectedFile = e.File;
-        _uploadError = null;
-    }
-
-    private async Task UploadAsync()
-    {
-        if (_selectedFile is null)
-            return;
-        _uploading = true;
         _uploadError = null;
         try
         {
-            await using var stream = _selectedFile.OpenReadStream(MaxFileSizeBytes);
-            await MaterialService.UploadAsync(
-                Id, _selectedFile.Name, _selectedFile.ContentType, stream,
-                _uploadKind, _uploadUnitId, _uploadDueDate);
-            _selectedFile = null;
-            await ReloadAsync();
+            _selectedFiles = e.GetMultipleFiles(MaxFilesPerUpload);
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
         {
-            _uploadError = $"Upload failed: {ex.Message}";
+            // Thrown when the selection exceeds MaxFilesPerUpload. Say so plainly rather than
+            // silently uploading a subset.
+            _selectedFiles = [];
+            _uploadError = ex.Message;
+        }
+    }
+
+    /// <summary>
+    /// Uploads the batch one file at a time, reporting progress as it goes.
+    ///
+    /// A failure part-way keeps everything already stored rather than rolling back: re-selecting
+    /// twenty files because the nineteenth was malformed would be its own punishment, and the
+    /// materials list shows exactly what landed.
+    /// </summary>
+    private async Task UploadAsync()
+    {
+        if (_selectedFiles.Count == 0)
+            return;
+
+        _uploading = true;
+        _uploadError = null;
+        _uploadedSoFar = 0;
+        var failures = new List<string>();
+
+        try
+        {
+            foreach (var file in _selectedFiles)
+            {
+                try
+                {
+                    await using var stream = file.OpenReadStream(MaxFileSizeBytes);
+                    await MaterialService.UploadAsync(
+                        Id, file.Name, file.ContentType, stream,
+                        _uploadKind, _uploadUnitId, _uploadDueDate);
+                    _uploadedSoFar++;
+                }
+                catch (Exception ex)
+                {
+                    failures.Add($"{file.Name}: {ex.Message}");
+                }
+                StateHasChanged();
+            }
+
+            _selectedFiles = [];
+            if (failures.Count > 0)
+                _uploadError = $"{failures.Count} file(s) failed — {string.Join("; ", failures.Take(3))}";
+
+            await ReloadAsync();
         }
         finally
         {
             _uploading = false;
         }
+    }
+
+    private async Task IngestAllAsync()
+    {
+        _confirmingIngestAll = false;
+        _jobError = null;
+        try
+        {
+            var queued = await AiJobService.QueueIngestAllAsync(Id);
+            _jobError = queued == 0 ? "Nothing to ingest — every material is already done or in flight." : null;
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    private void ToggleWeightsEditor()
+    {
+        _editingWeights = !_editingWeights;
+        _weightsSaved = false;
+    }
+
+    private void SetWeight(MaterialKind kind, string? value)
+    {
+        if (!int.TryParse(value, out var weight))
+            return;
+        var target = _weights.FirstOrDefault(w => w.Kind == kind);
+        if (target is not null)
+            target.Weight = Math.Clamp(weight, 0, 100);
+        _weightsSaved = false;
+    }
+
+    private void ResetWeights()
+    {
+        _weights = AssessmentWeight.Defaults();
+        _weightsSaved = false;
+    }
+
+    private async Task SaveWeightsAsync()
+    {
+        await CourseService.SaveAssessmentWeightsAsync(Id, _weights);
+        _weightsSaved = true;
+        _weights = await CourseService.GetAssessmentWeightsAsync(Id);
     }
 
     private async Task DeleteMaterialAsync(Guid materialId)

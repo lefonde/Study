@@ -71,6 +71,10 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasForeignKey(c => c.CurrentUnitId)
             .OnDelete(DeleteBehavior.SetNull);
 
+        // Read and rewritten as a whole profile, never queried per-kind, so JSON keeps it beside
+        // the course — same reasoning as MaterialExtract's sections and terms below.
+        modelBuilder.Entity<Course>().OwnsMany(c => c.AssessmentWeights, b => b.ToJson());
+
         modelBuilder.Entity<Material>()
             .HasOne(m => m.Course)
             .WithMany(c => c.Materials)

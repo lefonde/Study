@@ -25,4 +25,29 @@ public static class AiPricing
     }
 
     public static string Format(decimal usd) => usd is < 0.01m and > 0m ? "<$0.01" : $"${usd:0.00}";
+
+    // Ingestion is a vision pass, so cost tracks pages, and pages are only knowable by opening
+    // the file. These factors approximate tokens-per-megabyte across the mix this app sees
+    // (scanned assignments, text PDFs, photos of handwriting) and are wrong for any individual
+    // file — a 1 MB text PDF holds far more pages than a 1 MB photo.
+    private const decimal InputTokensPerMb = 15_000m;
+    private const decimal OutputTokensPerMb = 6_000m;
+
+    /// <summary>
+    /// A deliberately wide cost range for ingesting <paramref name="totalBytes"/> of material.
+    ///
+    /// Returned as a range, and shown as one, because a single confident-looking figure derived
+    /// from file size would be false precision — and this estimate exists specifically to be
+    /// trusted before spending real money in bulk. The recorded per-job cost afterwards is the
+    /// number that is actually accurate.
+    /// </summary>
+    public static (decimal Low, decimal High) EstimateIngestion(string model, long totalBytes)
+    {
+        var mb = totalBytes / (1024m * 1024m);
+        var midpoint = Estimate(model, (long)(mb * InputTokensPerMb), (long)(mb * OutputTokensPerMb));
+        return (midpoint * 0.5m, midpoint * 2m);
+    }
+
+    public static string FormatRange((decimal Low, decimal High) range) =>
+        range.High < 0.01m ? "<$0.01" : $"{Format(range.Low)}–{Format(range.High)}";
 }

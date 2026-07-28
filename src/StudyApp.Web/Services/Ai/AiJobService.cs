@@ -6,6 +6,9 @@ namespace StudyApp.Web.Services.Ai;
 
 public record CourseSpend(long InputTokens, long OutputTokens, decimal Usd, int JobCount);
 
+/// <summary>What a bulk ingestion would cover, so the cost can be shown before committing to it.</summary>
+public record PendingIngestion(int MaterialCount, long TotalBytes);
+
 /// <summary>Queues AI work and reports on it. The UI never touches <see cref="ClaudeService"/> directly.</summary>
 public class AiJobService(
     IDbContextFactory<StudyDbContext> factory,
@@ -37,6 +40,69 @@ public class AiJobService(
 
         await queue.EnqueueAsync(job.Id, ct);
         return job.Id;
+    }
+
+    /// <summary>
+    /// Materials in this course that haven't been ingested yet — the scope of "Ingest all", and
+    /// the basis of the estimate shown before it runs. Failed materials are included: a failure
+    /// is usually transient (a timeout, an oversized file) and retrying is the point.
+    /// </summary>
+    public async Task<PendingIngestion> GetPendingIngestionAsync(Guid courseId)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var pending = await db.Materials.AsNoTracking()
+            .Where(m => m.CourseId == courseId && m.Status != MaterialStatus.Ingested)
+            .Select(m => m.SizeBytes)
+            .ToListAsync();
+
+        return new PendingIngestion(pending.Count, pending.Sum());
+    }
+
+    /// <summary>
+    /// Queues an ingestion for every un-ingested material in the course, skipping any that
+    /// already has one in flight. Returns how many were actually queued.
+    ///
+    /// One job per material rather than one big job: <see cref="JobRunner"/> already runs them
+    /// serially, and per-material jobs mean a single bad file fails alone instead of taking the
+    /// whole batch — and everything already ingested isn't paid for twice on a retry.
+    /// </summary>
+    public async Task<int> QueueIngestAllAsync(Guid courseId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var pending = await db.Materials.AsNoTracking()
+            .Where(m => m.CourseId == courseId && m.Status != MaterialStatus.Ingested)
+            .Select(m => m.Id)
+            .ToListAsync(ct);
+
+        var inFlight = await db.GenerationJobs.AsNoTracking()
+            .Where(j => j.CourseId == courseId && j.Kind == JobKind.Ingest
+                        && (j.Status == JobStatus.Queued || j.Status == JobStatus.Running))
+            .Select(j => j.MaterialId)
+            .ToListAsync(ct);
+
+        var toQueue = pending.Where(id => !inFlight.Contains(id)).ToList();
+        if (toQueue.Count == 0)
+            return 0;
+
+        var jobs = toQueue.Select(materialId => new GenerationJob
+        {
+            CourseId = courseId,
+            MaterialId = materialId,
+            Kind = JobKind.Ingest,
+            Status = JobStatus.Queued,
+            Model = options.Model,
+        }).ToList();
+
+        db.GenerationJobs.AddRange(jobs);
+        await db.SaveChangesAsync(ct);
+
+        // Enqueued only after the rows are committed, so the runner can never pick up a job id
+        // that isn't in the database yet.
+        foreach (var job in jobs)
+            await queue.EnqueueAsync(job.Id, ct);
+
+        return jobs.Count;
     }
 
     public async Task<List<GenerationJob>> GetRecentAsync(Guid courseId, int take = 10)

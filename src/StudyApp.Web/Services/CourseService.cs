@@ -26,7 +26,13 @@ public class CourseService(IDbContextFactory<StudyDbContext> factory)
     public async Task<Course> CreateAsync(string name, string color)
     {
         await using var db = await factory.CreateDbContextAsync();
-        var course = new Course { Name = name.Trim(), Color = color };
+        // Seeded here rather than as a property initialiser — see Course.AssessmentWeights for why.
+        var course = new Course
+        {
+            Name = name.Trim(),
+            Color = color,
+            AssessmentWeights = AssessmentWeight.Defaults(),
+        };
         db.Courses.Add(course);
         await db.SaveChangesAsync();
         return course;
@@ -46,6 +52,32 @@ public class CourseService(IDbContextFactory<StudyDbContext> factory)
         await using var db = await factory.CreateDbContextAsync();
         var course = await db.Courses.FirstAsync(c => c.Id == id);
         course.NotesMarkdown = notesMarkdown;
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// The course's assessment-weighting profile, always complete.
+    ///
+    /// Goes through <see cref="AssessmentWeight.Complete"/> rather than returning the stored list
+    /// directly, because two cases yield a partial profile: courses created before the column
+    /// existed read back NULL (the property initializer only applies to objects constructed in
+    /// C#, not to rows materialised by EF), and a <see cref="MaterialKind"/> added later would be
+    /// absent from every profile already saved.
+    /// </summary>
+    public async Task<List<AssessmentWeight>> GetAssessmentWeightsAsync(Guid id)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var course = await db.Courses.AsNoTracking().FirstOrDefaultAsync(c => c.Id == id);
+        return AssessmentWeight.Complete(course?.AssessmentWeights ?? []);
+    }
+
+    public async Task SaveAssessmentWeightsAsync(Guid id, IEnumerable<AssessmentWeight> weights)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var course = await db.Courses.FirstAsync(c => c.Id == id);
+        course.AssessmentWeights = AssessmentWeight.Complete(weights)
+            .Select(w => new AssessmentWeight { Kind = w.Kind, Weight = Math.Clamp(w.Weight, 0, 100) })
+            .ToList();
         await db.SaveChangesAsync();
     }
 
