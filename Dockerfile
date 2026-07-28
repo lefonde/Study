@@ -16,6 +16,14 @@ RUN dotnet restore src/StudyApp.Web/StudyApp.Web.csproj
 COPY src/ src/
 RUN dotnet publish src/StudyApp.Web/StudyApp.Web.csproj -c Release -o /app --no-restore
 
+# Assert here as well as in the runtime stage, so a failure says whether publish never emitted
+# the Blazor runtime or the copy lost it. Prints the SDK actually used, because a floating base
+# image silently changing feature band is what broke this the first time.
+RUN dotnet --version \
+ && ls -la /app/wwwroot/ \
+ && test -f /app/wwwroot/_framework/blazor.web.js \
+    || (echo "FATAL: publish did not emit wwwroot/_framework/blazor.web.js" && exit 1)
+
 FROM mcr.microsoft.com/dotnet/aspnet:10.0.10
 WORKDIR /app
 COPY --from=build /app .
