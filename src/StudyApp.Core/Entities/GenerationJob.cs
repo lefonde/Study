@@ -6,6 +6,8 @@ public enum JobKind
     GenerateCards = 1,
     /// <summary>Course-scoped, so it carries no MaterialId — it reads every extract at once.</summary>
     MapCourse = 2,
+    /// <summary>Course-scoped: links cards to the topics they teach. Re-run as cards accumulate.</summary>
+    MapCoverage = 3,
 }
 
 public enum JobStatus
@@ -39,6 +41,12 @@ public class GenerationJob : ITimestamped
     public long OutputTokens { get; set; }
     /// <summary>Batch produced by a GenerateCards job, linking to its CardSuggestions.</summary>
     public Guid? BatchId { get; set; }
+
+    /// <summary>
+    /// Topics this run is aimed at, when generation was launched to fill specific gaps rather
+    /// than to work through a material. Empty for an untargeted run.
+    /// </summary>
+    public List<Guid> TargetTopicIds { get; set; } = [];
 
     public DateTime? StartedAt { get; set; }
     public DateTime? CompletedAt { get; set; }

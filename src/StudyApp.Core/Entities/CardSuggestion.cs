@@ -27,6 +27,15 @@ public class CardSuggestion : ITimestamped
 
     public Guid? UnitId { get; set; }
     public CourseUnit? Unit { get; set; }
+
+    /// <summary>
+    /// The topic this was written for, when generation was aimed at one. Carried across to a
+    /// <see cref="CardTopic"/> on approval, so a targeted card counts toward the gap it was
+    /// written to fill without a second AI pass to work out where it belongs.
+    /// </summary>
+    public Guid? CourseTopicId { get; set; }
+    public CourseTopic? Topic { get; set; }
+
     public Guid? SourceMaterialId { get; set; }
     public Material? SourceMaterial { get; set; }
     /// <summary>Human-readable locator within the source, e.g. "p. 14".</summary>

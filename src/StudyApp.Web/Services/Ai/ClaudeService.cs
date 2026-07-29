@@ -30,7 +30,8 @@ public record GeneratedCard(
     [property: JsonPropertyName("front")] string Front,
     [property: JsonPropertyName("back")] string Back,
     [property: JsonPropertyName("sourceReference")] string? SourceReference,
-    [property: JsonPropertyName("rationale")] string? Rationale);
+    [property: JsonPropertyName("rationale")] string? Rationale,
+    [property: JsonPropertyName("topicRef")] string? TopicRef);
 
 public record GenerationResult(
     [property: JsonPropertyName("cards")] List<GeneratedCard> Cards);
@@ -53,6 +54,13 @@ public record MappedProposal(
 public record MapResult(
     [property: JsonPropertyName("summary")] string Summary,
     [property: JsonPropertyName("proposals")] List<MappedProposal> Proposals);
+
+public record MappedCardLink(
+    [property: JsonPropertyName("cardRef")] string CardRef,
+    [property: JsonPropertyName("topicRefs")] List<string> TopicRefs);
+
+public record CoverageResult(
+    [property: JsonPropertyName("links")] List<MappedCardLink> Links);
 
 /// <summary>
 /// All Anthropic API access. Two calls, matching the two pipeline stages:
@@ -204,6 +212,43 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         }
         """;
 
+    private const string CoverageSystemPrompt = """
+        You decide which of a course's topics each flashcard actually helps the student learn.
+
+        For every card, list the topics it covers, by ref (T1, T2…).
+
+        - A card may cover more than one topic. "What is the difference between a mutex and a
+          semaphore?" genuinely serves both, and listing only one would leave the other looking
+          uncovered when a perfectly good card for it already exists.
+        - A card may cover none. Return an empty list rather than forcing a weak match: a card
+          wrongly credited to a topic hides a real gap, which is worse than leaving it unlinked.
+        - Judge what the card TEACHES, not which words it contains. A card asking for the four
+          conditions of circular wait covers Deadlock even without using that word.
+        - Only use refs that appear in the input. Never invent one.
+        """;
+
+    private static readonly string CoverageSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "cardRef": { "type": "string" },
+                  "topicRefs": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["cardRef", "topicRefs"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["links"],
+          "additionalProperties": false
+        }
+        """;
+
     private static readonly string ExtractionSchema = """
         {
           "type": "object",
@@ -254,9 +299,10 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
                   "front": { "type": "string" },
                   "back": { "type": "string" },
                   "sourceReference": { "type": "string" },
-                  "rationale": { "type": "string" }
+                  "rationale": { "type": "string" },
+                  "topicRef": { "type": "string", "description": "Topic ref (T1) this card is for. Empty when no topics were requested." }
                 },
-                "required": ["front", "back", "sourceReference", "rationale"],
+                "required": ["front", "back", "sourceReference", "rationale", "topicRef"],
                 "additionalProperties": false
               }
             }
@@ -314,10 +360,24 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         IReadOnlyList<string> glossary,
         IReadOnlyList<string> existingFronts,
         int targetCount,
+        string? targetTopics = null,
         CancellationToken ct = default)
     {
         var prompt = new StringBuilder();
         prompt.AppendLine($"Write up to {targetCount} flashcards from the source material below.");
+
+        if (!string.IsNullOrWhiteSpace(targetTopics))
+        {
+            prompt.AppendLine();
+            prompt.AppendLine("## Write cards ONLY for these topics — they currently have none");
+            prompt.AppendLine(targetTopics);
+            prompt.AppendLine();
+            prompt.AppendLine(
+                "Set topicRef on every card to the topic it covers. Spread the cards across the " +
+                "topics rather than exhausting the first one. If the source doesn't support a " +
+                "topic, write nothing for it and leave the gap visible rather than inventing " +
+                "material to fill it.");
+        }
 
         if (glossary.Count > 0)
         {
@@ -401,6 +461,42 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         };
 
         return await StreamJsonAsync<MapResult>(parameters, ct);
+    }
+
+    /// <summary>
+    /// Stage 2c: works out which topics each card covers.
+    ///
+    /// Separate from <see cref="MapCourseAsync"/> rather than folded into it: this needs
+    /// re-running whenever cards are added, which is far more often than the topic set changes,
+    /// and sending hundreds of card fronts through the mapping prompt would make re-mapping
+    /// expensive for no benefit.
+    /// </summary>
+    public async Task<AiResult<CoverageResult>> MapCoverageAsync(
+        string topics, string cards, CancellationToken ct = default)
+    {
+        var prompt = new StringBuilder();
+        prompt.AppendLine("## Topics");
+        prompt.AppendLine(topics);
+        prompt.AppendLine();
+        prompt.AppendLine("## Cards");
+        prompt.AppendLine(cards);
+
+        var parameters = new MessageCreateParams
+        {
+            Model = options.Model,
+            MaxTokens = 16000,
+            System = new List<TextBlockParam>
+            {
+                new() { Text = CoverageSystemPrompt, CacheControl = new CacheControlEphemeral() },
+            },
+            OutputConfig = new OutputConfig
+            {
+                Format = new JsonOutputFormat { Schema = ParseSchema(CoverageSchema) },
+            },
+            Messages = [new() { Role = Role.User, Content = prompt.ToString() }],
+        };
+
+        return await StreamJsonAsync<CoverageResult>(parameters, ct);
     }
 
     /// <summary>

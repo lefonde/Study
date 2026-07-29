@@ -8,6 +8,8 @@
 @inject AiOptions AiOptions
 @inject AiJobService AiJobService
 @inject CourseMapService CourseMapService
+@inject CoverageService CoverageService
+@using StudyApp.Core.Planning
 @inject SuggestionService SuggestionService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -565,9 +567,17 @@ else
             </div>
             @if (AiOptions.IsConfigured)
             {
-                <button class="btn btn-outline-primary" disabled="@_hasActiveJobs" @onclick="MapCourseAsync">
-                    @(_topics.Count == 0 ? "✨ Map this course" : "✨ Re-map with new material")
-                </button>
+                <span class="d-flex gap-2 flex-wrap">
+                    <button class="btn btn-outline-primary" disabled="@_hasActiveJobs" @onclick="MapCourseAsync">
+                        @(_topics.Count == 0 ? "✨ Map this course" : "✨ Re-map with new material")
+                    </button>
+                    @if (_topics.Count > 0 && _unlinkedCardCount > 0)
+                    {
+                        <button class="btn btn-outline-secondary" disabled="@_hasActiveJobs" @onclick="LinkCardsAsync">
+                            🔗 Link @_unlinkedCardCount card@(_unlinkedCardCount == 1 ? "" : "s")
+                        </button>
+                    }
+                </span>
             }
         </div>
 
@@ -677,6 +687,52 @@ else
         }
         else
         {
+            <div class="card mb-3">
+                <div class="card-body py-2">
+                    <div class="row g-2 align-items-center">
+                        <div class="col-6 col-md-3">
+                            <div class="text-muted small" title="Topics with at least one card">Coverage</div>
+                            <div class="fs-5">@Pct(_coverage.Coverage)</div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-muted small" title="The number worth acting on">Core covered</div>
+                            <div class="fs-5 @(_coverage.UncoveredCoreTopics > 0 ? "text-danger" : "")">
+                                @_coverage.CoveredCoreTopics / @_coverage.CoreTopics
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-muted small" title="How well you know the cards you have">Mastery</div>
+                            <div class="fs-5">@(_courseProgress is { Total: > 0 } mp ? Pct(mp.Mastery) : "—")</div>
+                        </div>
+                        <div class="col-6 col-md-3">
+                            <div class="text-muted small">Topics</div>
+                            <div class="fs-5">@_coverage.TotalTopics</div>
+                        </div>
+                    </div>
+                    <div class="text-muted small mt-1">
+                        Coverage and mastery are separate on purpose: low coverage means write more
+                        cards, low mastery means study the ones you have.
+                        <a href="how-it-works#progress">How mastery is calculated</a>
+                    </div>
+                </div>
+            </div>
+
+            @if (AiOptions.IsConfigured && _gaps.Count > 0)
+            {
+                <div class="alert alert-warning d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
+                    <span>
+                        <strong>@_gaps.Count topic@(_gaps.Count == 1 ? " has" : "s have") no cards</strong>
+                        @if (_coverage.UncoveredCoreTopics > 0)
+                        {
+                            <span> — @_coverage.UncoveredCoreTopics of them core.</span>
+                        }
+                    </span>
+                    <button class="btn btn-sm btn-primary" disabled="@_hasActiveJobs" @onclick="GenerateForGapsAsync">
+                        ✨ Generate cards for @(Math.Min(_gaps.Count, MaxGapTopicsPerRun)) of them
+                    </button>
+                </div>
+            }
+
             <div class="d-flex gap-3 mb-2 small text-muted">
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Core)</strong> core</span>
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Supporting)</strong> supporting</span>
@@ -691,6 +747,18 @@ else
                             <div class="flex-grow-1" style="min-width: 14rem;">
                                 <span class="badge @ImportanceBadge(topic.Importance) me-1">@topic.Importance</span>
                                 <span class="fw-semibold" dir="auto">@topic.Name</span>
+                                @if (CardsFor(topic.Id) is var cardCount)
+                                {
+                                    @if (cardCount > 0)
+                                    {
+                                        <span class="badge text-bg-light border ms-1"
+                                              title="Cards that teach this topic">@cardCount card@(cardCount == 1 ? "" : "s")</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-warning ms-1" title="Nothing you study covers this yet">no cards</span>
+                                    }
+                                }
                                 @if (topic.ImportancePinned)
                                 {
                                     <span class="badge text-bg-light border ms-1" title="Re-mapping will not change this">📌 pinned</span>
@@ -938,6 +1006,17 @@ else
     private CourseMapRevision? _pendingRevision;
     private List<string> _blockedReasons = [];
     private int _unmappedMaterialCount;
+
+    private List<TopicCoverage> _perTopicCoverage = [];
+    private CoverageReport _coverage = CoverageReport.Empty;
+    private List<TopicCoverage> _gaps = [];
+    private int _unlinkedCardCount;
+
+    /// <summary>
+    /// Cap on one gap-filling run. Keeps a single click's spend predictable on a course with a
+    /// large map, and keeps the inbox reviewable — the cards still have to be approved by hand.
+    /// </summary>
+    private const int MaxGapTopicsPerRun = 8;
     private List<AssessmentWeight> _weights = [];
     private bool _editingWeights;
     private bool _weightsSaved;
@@ -1028,6 +1107,10 @@ else
         _topics = await CourseMapService.GetTopicsAsync(Id);
         _pendingRevision = await CourseMapService.GetPendingRevisionAsync(Id);
         _unmappedMaterialCount = _materials.Count(m => m.Status != MaterialStatus.Ingested);
+
+        (_perTopicCoverage, _coverage) = await CoverageService.GetCoverageAsync(Id);
+        _gaps = [.. CoveragePolicy.Gaps(_perTopicCoverage)];
+        _unlinkedCardCount = await CoverageService.CountUnlinkedCardsAsync(Id);
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
         _spend = await AiJobService.GetSpendAsync(Id);
@@ -1325,6 +1408,43 @@ else
         TopicChangeKind.Merge => "text-bg-primary",
         _ => "text-bg-secondary",
     };
+
+    private int CardsFor(Guid topicId) =>
+        _perTopicCoverage.FirstOrDefault(c => c.Topic.Id == topicId)?.CardCount ?? 0;
+
+    private async Task LinkCardsAsync()
+    {
+        _jobError = null;
+        try
+        {
+            await AiJobService.QueueCourseJobAsync(Id, JobKind.MapCoverage);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    /// <summary>
+    /// Generates for the most important gaps first — <see cref="CoveragePolicy.Gaps"/> already
+    /// returns them in that order, so taking the head of the list means core topics get served
+    /// before peripheral ones.
+    /// </summary>
+    private async Task GenerateForGapsAsync()
+    {
+        _jobError = null;
+        try
+        {
+            var targets = _gaps.Take(MaxGapTopicsPerRun).Select(g => g.Topic.Id).ToList();
+            await AiJobService.QueueTopicGenerationAsync(Id, targets);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
 
     private async Task MapCourseAsync()
     {

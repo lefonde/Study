@@ -113,6 +113,9 @@ public class JobRunner(
                 case JobKind.MapCourse:
                     await scope.ServiceProvider.GetRequiredService<CourseMapService>().RunAsync(job, ct);
                     break;
+                case JobKind.MapCoverage:
+                    await scope.ServiceProvider.GetRequiredService<CoverageService>().RunAsync(job, ct);
+                    break;
             }
         }
         catch (Exception ex)

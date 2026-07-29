@@ -73,6 +73,34 @@ public class AiJobService(
     }
 
     /// <summary>
+    /// Queues generation aimed at specific topics rather than at a material — the action a
+    /// coverage gap leads to.
+    /// </summary>
+    public async Task<Guid> QueueTopicGenerationAsync(
+        Guid courseId, IReadOnlyList<Guid> topicIds, CancellationToken ct = default)
+    {
+        if (topicIds.Count == 0)
+            throw new InvalidOperationException("Pick at least one topic to generate cards for.");
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var job = new GenerationJob
+        {
+            CourseId = courseId,
+            MaterialId = null,
+            Kind = JobKind.GenerateCards,
+            Status = JobStatus.Queued,
+            Model = options.Model,
+            TargetTopicIds = [.. topicIds],
+        };
+        db.GenerationJobs.Add(job);
+        await db.SaveChangesAsync(ct);
+
+        await queue.EnqueueAsync(job.Id, ct);
+        return job.Id;
+    }
+
+    /// <summary>
     /// Materials in this course that haven't been ingested yet — the scope of "Ingest all", and
     /// the basis of the estimate shown before it runs. Failed materials are included: a failure
     /// is usually transient (a timeout, an oversized file) and retrying is the point.

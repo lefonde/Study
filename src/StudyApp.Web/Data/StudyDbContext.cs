@@ -19,6 +19,7 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<TopicSource> TopicSources => Set<TopicSource>();
     public DbSet<CourseMapRevision> CourseMapRevisions => Set<CourseMapRevision>();
     public DbSet<TopicProposal> TopicProposals => Set<TopicProposal>();
+    public DbSet<CardTopic> CardTopics => Set<CardTopic>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -229,6 +230,34 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         // TopicSource rows it becomes.
         modelBuilder.Entity<TopicProposal>().OwnsMany(p => p.Sources, b => b.ToJson());
 
+        // Composite key: the pair IS the fact, so a card can never be linked to one topic twice.
+        modelBuilder.Entity<CardTopic>().HasKey(ct => new { ct.CardId, ct.CourseTopicId });
+
+        modelBuilder.Entity<CardTopic>()
+            .HasOne(ct => ct.Card)
+            .WithMany()
+            .HasForeignKey(ct => ct.CardId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        modelBuilder.Entity<CardTopic>()
+            .HasOne(ct => ct.Topic)
+            .WithMany()
+            .HasForeignKey(ct => ct.CourseTopicId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Both ends are soft-deleted in practice, and a link to a deleted card or topic is not
+        // coverage — it would inflate the numbers with cards the user has already thrown away.
+        modelBuilder.Entity<CardTopic>()
+            .HasQueryFilter(ct => !ct.Card!.IsDeleted && !ct.Topic!.IsDeleted);
+
+        // Provenance, like the suggestion's unit and source material: losing the topic must not
+        // delete a suggestion still waiting in the inbox.
+        modelBuilder.Entity<CardSuggestion>()
+            .HasOne(s => s.Topic)
+            .WithMany()
+            .HasForeignKey(s => s.CourseTopicId)
+            .OnDelete(DeleteBehavior.SetNull);
+
         modelBuilder.Entity<Card>().HasIndex(c => new { c.DeckId, c.Due });
         modelBuilder.Entity<ReviewLog>().HasIndex(r => r.ReviewedAt);
         modelBuilder.Entity<CourseUnit>().HasIndex(u => new { u.CourseId, u.ParentId, u.Order });
@@ -249,5 +278,8 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         modelBuilder.Entity<TopicSource>().HasIndex(s => s.CourseTopicId);
         // The Map tab's first question on every load: is a revision waiting for review?
         modelBuilder.Entity<CourseMapRevision>().HasIndex(r => new { r.CourseId, r.Status });
+        // Coverage counts cards per topic; the composite PK already covers the other direction.
+        modelBuilder.Entity<CardTopic>().HasIndex(ct => ct.CourseTopicId);
+        modelBuilder.Entity<GenerationJob>().PrimitiveCollection(j => j.TargetTopicIds);
     }
 }

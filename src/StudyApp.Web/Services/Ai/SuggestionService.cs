@@ -45,6 +45,7 @@ public class SuggestionService(IDbContextFactory<StudyDbContext> factory)
             SourceReference = suggestion.SourceReference,
         };
         db.Cards.Add(card);
+        LinkTopic(db, card, suggestion);
 
         suggestion.Status = SuggestionStatus.Accepted;
         suggestion.AcceptedCardId = card.Id;
@@ -84,12 +85,24 @@ public class SuggestionService(IDbContextFactory<StudyDbContext> factory)
                 SourceReference = suggestion.SourceReference,
             };
             db.Cards.Add(card);
+            LinkTopic(db, card, suggestion);
             suggestion.Status = SuggestionStatus.Accepted;
             suggestion.AcceptedCardId = card.Id;
         }
 
         await db.SaveChangesAsync();
         return pending.Count;
+    }
+
+    /// <summary>
+    /// Carries a targeted suggestion's topic across to the new card, so a card written to fill a
+    /// specific gap counts toward that gap immediately — without waiting on a coverage pass to
+    /// rediscover what was already known when it was generated.
+    /// </summary>
+    private static void LinkTopic(StudyDbContext db, Card card, CardSuggestion suggestion)
+    {
+        if (suggestion.CourseTopicId is { } topicId)
+            db.CardTopics.Add(new CardTopic { CardId = card.Id, CourseTopicId = topicId });
     }
 
     public async Task<int> RejectBatchAsync(Guid batchId)

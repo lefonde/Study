@@ -19,6 +19,14 @@ public class CardGenerationService(
     {
         await using var db = await factory.CreateDbContextAsync(ct);
 
+        // Targeted runs carry topics instead of a material, and draw their source text from
+        // whatever those topics cite — see GenerateForTopicsAsync.
+        if (job.TargetTopicIds.Count > 0)
+        {
+            await GenerateForTopicsAsync(db, job, ct);
+            return;
+        }
+
         var material = await db.Materials
             .Include(m => m.Extract)
             .FirstOrDefaultAsync(m => m.Id == job.MaterialId, ct)
@@ -68,7 +76,7 @@ public class CardGenerationService(
             glossary,
             [.. existingFronts, .. pendingFronts],
             DefaultTargetCount,
-            ct);
+            ct: ct);
 
         var batchId = Guid.NewGuid();
         foreach (var card in result.Value.Cards)
@@ -93,6 +101,113 @@ public class CardGenerationService(
         job.InputTokens = result.InputTokens;
         job.OutputTokens = result.OutputTokens;
         job.Message = $"{result.Value.Cards.Count} card(s) ready for review.";
+
+        db.GenerationJobs.Attach(job);
+        db.Entry(job).State = EntityState.Modified;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Writes cards for specific topics that currently have none — the closing half of the loop
+    /// that starts with the map showing a gap.
+    ///
+    /// Source text comes from whatever material the topics cite (their <see cref="TopicSource"/>
+    /// rows), so a run aimed at three topics reads only the extracts that actually discuss them
+    /// instead of the whole course.
+    /// </summary>
+    private async Task GenerateForTopicsAsync(StudyDbContext db, GenerationJob job, CancellationToken ct)
+    {
+        var topics = await db.CourseTopics.AsNoTracking()
+            .Include(t => t.Sources)
+            .Where(t => job.TargetTopicIds.Contains(t.Id) && t.CourseId == job.CourseId)
+            .OrderByDescending(t => t.Importance)
+            .ThenBy(t => t.Name)
+            .ToListAsync(ct);
+
+        if (topics.Count == 0)
+            throw new InvalidOperationException("Those topics no longer exist.");
+
+        var materialIds = topics.SelectMany(t => t.Sources).Select(s => s.MaterialId).Distinct().ToList();
+        var extracts = await db.MaterialExtracts.AsNoTracking()
+            .Include(e => e.Material)
+            .Where(e => materialIds.Contains(e.MaterialId))
+            .ToListAsync(ct);
+
+        if (extracts.Count == 0)
+            throw new InvalidOperationException(
+                "The material these topics came from is no longer available — re-ingest it first.");
+
+        var topicRefs = topics.Select((t, i) => (Topic: t, Ref: $"T{i + 1}")).ToList();
+        var topicText = string.Join("\n", topicRefs.Select(x =>
+            $"- [{x.Ref}] {x.Topic.Name} ({x.Topic.Importance.ToString().ToLowerInvariant()}): {x.Topic.Summary}"));
+
+        var sourceText = string.Join("\n\n", extracts.Select(e =>
+            $"### {e.Material?.Title}\n{e.ToMarkdown()}"));
+
+        var glossary = extracts
+            .SelectMany(e => e.Terms)
+            .Select(t => $"{t.Term} — {t.Definition}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(200)
+            .ToList();
+
+        var existingFronts = await db.Cards
+            .Where(c => c.Deck!.CourseId == job.CourseId)
+            .Select(c => c.Front)
+            .ToListAsync(ct);
+        var pendingFronts = await db.CardSuggestions
+            .Where(s => s.CourseId == job.CourseId && s.Status == SuggestionStatus.Pending)
+            .Select(s => s.Front)
+            .ToListAsync(ct);
+
+        // Scaled to the gap: a handful of cards each, rather than a fixed batch that would
+        // over-serve one topic and starve the rest.
+        var targetCount = Math.Clamp(topics.Count * 4, 5, 40);
+
+        var result = await claude.GenerateCardsAsync(
+            sourceText, glossary, [.. existingFronts, .. pendingFronts], targetCount, topicText, ct: ct);
+
+        var topicByRef = topicRefs.ToDictionary(x => x.Ref, x => x.Topic.Id, StringComparer.OrdinalIgnoreCase);
+        var batchId = Guid.NewGuid();
+        var written = 0;
+
+        foreach (var card in result.Value.Cards)
+        {
+            if (string.IsNullOrWhiteSpace(card.Front) || string.IsNullOrWhiteSpace(card.Back))
+                continue;
+
+            Guid? topicId = null;
+            if (!string.IsNullOrWhiteSpace(card.TopicRef)
+                && topicByRef.TryGetValue(card.TopicRef.Trim(), out var resolved))
+            {
+                topicId = resolved;
+            }
+
+            db.CardSuggestions.Add(new CardSuggestion
+            {
+                CourseId = job.CourseId,
+                BatchId = batchId,
+                Front = ClaudeService.NormalizeMarkdown(card.Front).Trim(),
+                Back = ClaudeService.NormalizeMarkdown(card.Back).Trim(),
+                CourseTopicId = topicId,
+                UnitId = topics.FirstOrDefault(t => t.Id == topicId)?.UnitId,
+                SourceReference = card.SourceReference,
+                Rationale = card.Rationale,
+            });
+            written++;
+        }
+
+        var unserved = topics.Count - result.Value.Cards
+            .Select(c => c.TopicRef?.Trim())
+            .Where(r => !string.IsNullOrWhiteSpace(r) && topicByRef.ContainsKey(r!))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        job.BatchId = batchId;
+        job.InputTokens = result.InputTokens;
+        job.OutputTokens = result.OutputTokens;
+        job.Message = $"{written} card(s) ready for review across {topics.Count} topic(s)"
+                      + (unserved > 0 ? $"; {unserved} topic(s) had no usable source material." : ".");
 
         db.GenerationJobs.Attach(job);
         db.Entry(job).State = EntityState.Modified;
