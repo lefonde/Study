@@ -1467,9 +1467,12 @@ else
         var notesVisible = _activeTab == "notes" && !_editingNotes && !string.IsNullOrWhiteSpace(_course?.NotesMarkdown);
         var inboxVisible = _activeTab == "inbox" && _suggestions.Count > 0;
         // Topic names and summaries carry LaTeX exactly like cards do, and the materials tab
-        // renders topic names too once an assignment plan is expanded.
+        // renders them too — in an expanded assignment plan, and in a solution's feedback, whose
+        // comments quote the working they are about. Any new expander here that shows model-
+        // authored text has to be added to this condition, or its LaTeX stays as \(…\).
         var mapVisible = _activeTab == "map";
-        var materialsVisible = _activeTab == "materials" && _expandedPlanId is not null;
+        var materialsVisible = _activeTab == "materials"
+            && (_expandedPlanId is not null || _expandedReviewId is not null);
 
         // Suggested cards carry LaTeX just like real ones, so the inbox needs the same pass.
         var target = notesVisible ? _notesRef
