@@ -586,37 +586,7 @@ else
                             {
                                 <tr>
                                     <td colspan="7" class="bg-body-tertiary">
-                                        <div class="fw-semibold mb-1">
-                                            What to do before @m.Title
-                                            <span class="text-muted small">
-                                                — @plan.DaysRemaining day@(plan.DaysRemaining == 1 ? "" : "s") left,
-                                                @plan.Items.Count topic@(plan.Items.Count == 1 ? "" : "s") assessed
-                                            </span>
-                                        </div>
-                                        <ol class="mb-0 small">
-                                            @foreach (var item in plan.Items)
-                                            {
-                                                <li class="mb-1">
-                                                    <span class="badge @PlanActionBadge(item.Action) me-1">@PlanActionLabel(item.Action)</span>
-                                                    <span class="fw-semibold md-content" dir="auto">@MdInline(item.Topic.Name)</span>
-                                                    <span class="badge @ImportanceBadge(item.Topic.Importance) ms-1">@item.Topic.Importance</span>
-                                                    <span class="text-muted ms-1">
-                                                        @if (item.Action == StudyAction.WriteCards)
-                                                        {
-                                                            <span>nothing to study yet</span>
-                                                        }
-                                                        else if (item.Action == StudyAction.Review)
-                                                        {
-                                                            <span>@item.CardsNeedingWork of @item.CardCount card@(item.CardCount == 1 ? "" : "s") need work · @Pct(item.Mastery) mastery</span>
-                                                        }
-                                                        else
-                                                        {
-                                                            <span>@item.CardCount card@(item.CardCount == 1 ? "" : "s") · holds past the deadline</span>
-                                                        }
-                                                    </span>
-                                                </li>
-                                            }
-                                        </ol>
+                                        <StudyPlanView Plan="plan" Title="@m.Title" AssignmentId="m.Id" />
                                     </td>
                                 </tr>
                             }
@@ -885,8 +855,112 @@ else
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Core)</strong> core</span>
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Supporting)</strong> supporting</span>
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Peripheral)</strong> peripheral</span>
+                <span class="ms-auto btn-group btn-group-sm">
+                    <button class="btn @(_mapAsList ? "btn-outline-secondary" : "btn-secondary")"
+                            title="Topics laid out in the order you can learn them"
+                            @onclick="() => _mapAsList = false">Path</button>
+                    <button class="btn @(_mapAsList ? "btn-secondary" : "btn-outline-secondary")"
+                            title="Every topic in one list, with its settings"
+                            @onclick="() => _mapAsList = true">List</button>
+                </span>
             </div>
 
+            @* Deadlines belong on the map: the question is never "what does this course cover"
+               in the abstract, it's "what do I need before the next thing that's due". *@
+            @if (UpcomingAssignments.Any())
+            {
+                <div class="d-flex gap-2 flex-wrap mb-3">
+                    @foreach (var assignment in UpcomingAssignments)
+                    {
+                        <button class="btn btn-sm @(_selectedAssignmentId == assignment.Id ? "btn-primary" : "btn-outline-primary")"
+                                @onclick="() => _selectedAssignmentId = _selectedAssignmentId == assignment.Id ? null : assignment.Id">
+                            <span class="md-content" dir="auto">📝 @MdInline(assignment.Title)</span>
+                            <span class="badge text-bg-light border ms-1">@DueLabel(assignment.DueDate!.Value)</span>
+                        </button>
+                    }
+                </div>
+            }
+
+            @if (_selectedAssignmentId is { } selectedId && _assignmentPlans.TryGetValue(selectedId, out var selectedPlan))
+            {
+                <div class="card mb-3 border-primary">
+                    <div class="card-body py-2">
+                        <StudyPlanView Plan="selectedPlan"
+                                       Title="@(_materials.FirstOrDefault(m => m.Id == selectedId)?.Title ?? "")"
+                                       AssignmentId="selectedId" />
+                    </div>
+                </div>
+            }
+
+            @if (!_mapAsList)
+            {
+                @if (!_progression.HasAnyEdges)
+                {
+                    <div class="alert alert-secondary py-2 small">
+                        No dependencies recorded yet, so there's no order to show — every topic reads
+                        as a starting point. Re-map the course to have them worked out, or set them
+                        by hand from the <button class="btn btn-link p-0 align-baseline"
+                                                 @onclick="() => _mapAsList = true">List</button> view.
+                    </div>
+                }
+
+                @* dir="ltr": stages always flow left to right whatever the course's language, or
+                   the drawn geometry stops matching the reading order. Individual names keep
+                   dir="auto" so Hebrew still lays out correctly inside its card. *@
+                <div class="topic-graph mb-3" dir="ltr" @ref="_graphRef">
+                    <svg class="graph-edges" data-edges xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
+                    @foreach (var stage in _progression.Stages)
+                    {
+                        <div class="graph-stage">
+                            <div class="graph-stage-label">Stage @(stage.Index + 1)</div>
+                            @foreach (var topic in stage.Topics)
+                            {
+                                <div class="graph-node @NodeStateClass(topic)"
+                                     data-topic="@topic.Id"
+                                     data-requires="@RequiresAttribute(topic)">
+                                    <div class="d-flex align-items-start gap-1">
+                                        <span class="badge @ImportanceBadge(topic.Importance)">@topic.Importance.ToString()[..1]</span>
+                                        <span class="fw-semibold small md-content" dir="auto">@MdInline(topic.Name)</span>
+                                    </div>
+                                    <div class="small mt-1">
+                                        @if (CardsFor(topic.Id) is var n && n > 0)
+                                        {
+                                            <span class="text-muted">@n card@(n == 1 ? "" : "s")</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-warning">no cards</span>
+                                        }
+                                    </div>
+                                </div>
+                            }
+                            @foreach (var milestone in MilestonesAfterStage(stage.Index))
+                            {
+                                <div class="graph-milestone @(_selectedAssignmentId == milestone.Id ? "selected" : "")"
+                                     @onclick="() => _selectedAssignmentId = _selectedAssignmentId == milestone.Id ? null : milestone.Id">
+                                    <div class="fw-semibold small md-content" dir="auto">📝 @MdInline(milestone.Title)</div>
+                                    <div class="small">
+                                        @if (milestone.SubmittedAt is { } handedIn)
+                                        {
+                                            <span>✓ submitted @handedIn.ToLocalTime().ToString("d MMM")</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@DueLabel(milestone.DueDate!.Value)</span>
+                                            @if (_assignmentPlans.TryGetValue(milestone.Id, out var milestonePlan))
+                                            {
+                                                <span> · @milestonePlan.TopicsReady/@milestonePlan.Items.Count ready</span>
+                                            }
+                                        }
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            }
+            else
+            {
             <div class="list-group">
                 @foreach (var topic in _topics)
                 {
@@ -1003,6 +1077,7 @@ else
                     </div>
                 }
             </div>
+            }
         }
         </div>
     }
@@ -1199,6 +1274,11 @@ else
     private int _unmappedMaterialCount;
     private string? _prerequisiteError;
     private Guid? _editingPrerequisitesFor;
+    private ProgressionMap _progression = ProgressionMap.Empty;
+    private bool _mapAsList;
+    private Guid? _selectedAssignmentId;
+    private ElementReference _graphRef;
+    private IJSObjectReference? _graphJs;
 
     private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
     private Guid? _expandedPlanId;
@@ -1288,6 +1368,23 @@ else
             : mapVisible ? _mapRef
             : materialsVisible ? _materialsRef
             : (ElementReference?)null;
+
+        // Connector lines can only be placed once the browser has laid the stage columns out, so
+        // they are drawn here rather than rendered. Redrawing on every pass is what keeps them
+        // attached after a topic is dismissed or the assignment selection changes.
+        if (mapVisible && !_mapAsList && _progression.HasAnyEdges)
+        {
+            try
+            {
+                _graphJs ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/graphEdges.js");
+                await _graphJs.InvokeVoidAsync("drawEdges", _graphRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                // Same hazard as the maths pass: a tab switch can make the element reference
+                // stale between the check and the call resolving.
+            }
+        }
         if (target is { } element)
         {
             try
@@ -1317,8 +1414,16 @@ else
         {
             if (_mathJs is not null)
                 await _mathJs.DisposeAsync();
+
+            if (_graphJs is not null)
+            {
+                // Disconnect the ResizeObserver first — it holds a reference to an element on a
+                // page nobody is looking at, and would keep firing redraws into it.
+                await _graphJs.InvokeVoidAsync("disposeEdges", _graphRef);
+                await _graphJs.DisposeAsync();
+            }
         }
-        catch (JSDisconnectedException)
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException)
         {
             // Circuit already gone; nothing to clean up client-side.
         }
@@ -1343,6 +1448,12 @@ else
         _topics = await CourseMapService.GetTopicsAsync(Id);
         _pendingRevision = await CourseMapService.GetPendingRevisionAsync(Id);
         _unmappedMaterialCount = _materials.Count(m => m.Status != MaterialStatus.Ingested);
+
+        // The learning path, derived from edges already loaded with the topics — no extra query.
+        _progression = PrerequisiteGraph.Build(
+            _topics,
+            _topics.SelectMany(t => t.Prerequisites)
+                   .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId)));
 
         (_perTopicCoverage, _coverage) = await CoverageService.GetCoverageAsync(Id);
         _gaps = [.. CoveragePolicy.Gaps(_perTopicCoverage)];
@@ -1726,6 +1837,69 @@ else
 
     private string TopicName(Guid topicId) =>
         _topics.FirstOrDefault(t => t.Id == topicId)?.Name ?? "(dismissed)";
+
+    // --- the progression map ---
+
+    private IEnumerable<Material> UpcomingAssignments =>
+        _materials.Where(m => m.DueDate is not null && m.SubmittedAt is null)
+                  .OrderBy(m => m.DueDate);
+
+    /// <summary>
+    /// Prerequisite ids for the JS to join up, taken from the graph rather than the topic so
+    /// dismissed topics are already bypassed — otherwise a line would point at a card that isn't
+    /// on screen.
+    /// </summary>
+    private string RequiresAttribute(CourseTopic topic) =>
+        string.Join(",", _progression.PrerequisitesOf(topic.Id));
+
+    /// <summary>
+    /// An assignment sits after the deepest stage it assesses: that is the point in the course by
+    /// which everything it tests has been reached.
+    /// </summary>
+    private IEnumerable<Material> MilestonesAfterStage(int stageIndex) =>
+        _materials
+            .Where(m => m.DueDate is not null
+                        && _assignmentPlans.TryGetValue(m.Id, out var plan)
+                        && DeepestStage(plan) == stageIndex)
+            .OrderBy(m => m.DueDate);
+
+    private int DeepestStage(StudyPlan plan) =>
+        plan.Assessed
+            .Select(i => _progression.StageByTopic.GetValueOrDefault(i.Topic.Id, 0))
+            .DefaultIfEmpty(0)
+            .Max();
+
+    /// <summary>
+    /// Dims everything the selected assignment doesn't touch, so "which subjects are related to
+    /// this deadline" is answered by looking rather than by reading.
+    /// </summary>
+    private string NodeStateClass(CourseTopic topic)
+    {
+        var uncovered = CardsFor(topic.Id) == 0 ? " uncovered" : "";
+
+        if (_selectedAssignmentId is not { } id || !_assignmentPlans.TryGetValue(id, out var plan))
+            return uncovered;
+
+        var item = plan.Items.FirstOrDefault(i => i.Topic.Id == topic.Id);
+        return item switch
+        {
+            null => uncovered + " dimmed",
+            { IsFoundation: true } => uncovered + " foundation",
+            _ => uncovered + " assessed",
+        };
+    }
+
+    private static string DueLabel(DateTime due)
+    {
+        var days = (int)Math.Ceiling((due.Date - DateTime.Now.Date).TotalDays);
+        return days switch
+        {
+            < 0 => $"{-days}d overdue",
+            0 => "due today",
+            1 => "due tomorrow",
+            _ => $"in {days}d",
+        };
+    }
 
     private async Task AddPrerequisiteAsync(Guid topicId, string? prerequisiteId)
     {

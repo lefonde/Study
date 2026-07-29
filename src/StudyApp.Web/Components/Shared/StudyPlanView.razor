@@ -1,0 +1,100 @@
+@* What stands between you and one assignment.
+
+   Shared between the materials tab and the map's assignment panel so the two can never drift
+   into saying different things about the same deadline. *@
+
+@using StudyApp.Core.Planning
+@using StudyApp.Web.Services
+
+<div class="fw-semibold mb-1">
+    What to do before <span class="md-content" dir="auto">@Inline(Title)</span>
+    <span class="text-muted small">
+        — @Plan.DaysRemaining day@(Plan.DaysRemaining == 1 ? "" : "s") left,
+        @Plan.Assessed.Count() topic@(Plan.Assessed.Count() == 1 ? "" : "s") assessed@(FoundationCount > 0 ? $" + {FoundationCount} underneath" : "")
+    </span>
+    @if (AssignmentId is { } id)
+    {
+        <a class="btn btn-sm btn-outline-success ms-2" href="review/assignment/@id">🎯 Study these</a>
+    }
+</div>
+
+@RenderGroup(Plan.Assessed, "Assessed", "What this assignment's own material tests.")
+
+@if (FoundationCount > 0)
+{
+    @RenderGroup(Plan.Foundations, "Foundations — needed for the above",
+        "Not tested directly, but the assessed topics build on these.")
+}
+
+@code {
+    [Parameter, EditorRequired] public StudyPlan Plan { get; set; } = StudyPlan.Empty;
+    [Parameter] public string Title { get; set; } = "";
+
+    /// <summary>Set to offer a scoped review session; omit where one is already on screen.</summary>
+    [Parameter] public Guid? AssignmentId { get; set; }
+
+    private int FoundationCount => Plan.Foundations.Count();
+
+    private static MarkupString Inline(string? markdown) =>
+        (MarkupString)MarkdownRenderer.ToInlineHtml(markdown);
+
+    private RenderFragment RenderGroup(IEnumerable<TopicPlanItem> items, string heading, string blurb) =>
+        @<div class="mb-2">
+            <div class="text-muted small text-uppercase mt-2" title="@blurb">@heading</div>
+            <ol class="mb-0 small">
+                @foreach (var item in items)
+                {
+                    <li class="mb-1">
+                        <span class="badge @PlanActionBadge(item.Action) me-1">@PlanActionLabel(item.Action)</span>
+                        <span class="fw-semibold md-content" dir="auto">@Inline(item.Topic.Name)</span>
+                        <span class="badge @ImportanceBadge(item.Topic.Importance) ms-1">@item.Topic.Importance</span>
+                        <span class="text-muted ms-1">
+                            @if (item.Action == StudyAction.WriteCards)
+                            {
+                                <span>nothing to study yet</span>
+                            }
+                            else if (item.Action == StudyAction.Review)
+                            {
+                                <span>@item.CardsNeedingWork of @item.CardCount card@(item.CardCount == 1 ? "" : "s") need work · @Pct(item.Mastery) mastery</span>
+                            }
+                            else
+                            {
+                                <span>@item.CardCount card@(item.CardCount == 1 ? "" : "s") · holds past the deadline</span>
+                            }
+                        </span>
+                        @* A foundation with no cards is the one thing here that stops other work
+                           being possible, so it says what it is holding up. *@
+                        @if (item.IsBlocking && item.RequiredBy is { Count: > 0 } blocked)
+                        {
+                            <span class="badge text-bg-danger ms-1 md-content" dir="auto">
+                                ⚠ blocks @Inline(string.Join(", ", blocked.Take(2)))@(blocked.Count > 2 ? "…" : "")
+                            </span>
+                        }
+                    </li>
+                }
+            </ol>
+        </div>;
+
+    private static string PlanActionBadge(StudyAction action) => action switch
+    {
+        StudyAction.WriteCards => "text-bg-danger",
+        StudyAction.Review => "text-bg-warning",
+        _ => "text-bg-success",
+    };
+
+    private static string PlanActionLabel(StudyAction action) => action switch
+    {
+        StudyAction.WriteCards => "Write cards",
+        StudyAction.Review => "Review",
+        _ => "Ready",
+    };
+
+    private static string ImportanceBadge(TopicImportance importance) => importance switch
+    {
+        TopicImportance.Core => "text-bg-danger",
+        TopicImportance.Supporting => "text-bg-primary",
+        _ => "text-bg-secondary",
+    };
+
+    private static string Pct(double fraction) => $"{fraction * 100:0}%";
+}

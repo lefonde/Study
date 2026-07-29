@@ -37,7 +37,60 @@ public class StudyPlanService(IDbContextFactory<StudyDbContext> factory, StudyPl
         if (topicIds.Count == 0)
             return null;
 
-        return await BuildAsync(db, topicIds, DateTime.SpecifyKind(due.Date, DateTimeKind.Utc));
+        // Assessing a topic means needing everything underneath it too, so the plan reaches past
+        // what the material literally tests. Marked as foundations rather than mixed in: they are
+        // a different kind of obligation, and "Topic 2 blocks Topic 6" is more use than a longer
+        // undifferentiated list.
+        var edges = await EdgesForCourseAsync(db, material.CourseId);
+        var foundationIds = PrerequisiteGraph.Ancestors(edges, topicIds);
+
+        var requiredBy = await RequiredByAsync(db, edges, topicIds, foundationIds);
+
+        return await BuildAsync(
+            db,
+            [.. topicIds, .. foundationIds],
+            DateTime.SpecifyKind(due.Date, DateTimeKind.Utc),
+            [.. foundationIds],
+            requiredBy);
+    }
+
+    private static async Task<List<TopicEdge>> EdgesForCourseAsync(StudyDbContext db, Guid courseId) =>
+        await db.TopicPrerequisites.AsNoTracking()
+            .Where(p => p.Topic!.CourseId == courseId)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToListAsync();
+
+    /// <summary>
+    /// For each foundation, the assessed topics that rest on it — so the plan can say what a gap
+    /// is actually blocking rather than only that it exists.
+    /// </summary>
+    private static async Task<Dictionary<Guid, IReadOnlyList<string>>> RequiredByAsync(
+        StudyDbContext db,
+        List<TopicEdge> edges,
+        List<Guid> assessedIds,
+        IReadOnlyList<Guid> foundationIds)
+    {
+        if (foundationIds.Count == 0)
+            return [];
+
+        var names = await db.CourseTopics.AsNoTracking()
+            .Where(t => assessedIds.Contains(t.Id))
+            .ToDictionaryAsync(t => t.Id, t => t.Name);
+
+        var result = foundationIds.ToDictionary(id => id, _ => new List<string>());
+
+        // Small sets — a handful of assessed topics each with a handful of ancestors — so walking
+        // the closure once per assessed topic is cheaper than any cleverer arrangement.
+        foreach (var assessedId in assessedIds)
+        {
+            foreach (var ancestor in PrerequisiteGraph.Ancestors(edges, [assessedId]))
+            {
+                if (result.TryGetValue(ancestor, out var list) && names.TryGetValue(assessedId, out var name))
+                    list.Add(name);
+            }
+        }
+
+        return result.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value);
     }
 
     /// <summary>
@@ -59,7 +112,11 @@ public class StudyPlanService(IDbContextFactory<StudyDbContext> factory, StudyPl
     }
 
     private async Task<StudyPlan> BuildAsync(
-        StudyDbContext db, List<Guid> topicIds, DateTime targetDateUtc)
+        StudyDbContext db,
+        List<Guid> topicIds,
+        DateTime targetDateUtc,
+        HashSet<Guid>? foundationIds = null,
+        Dictionary<Guid, IReadOnlyList<string>>? requiredBy = null)
     {
         var topics = await db.CourseTopics.AsNoTracking()
             .Where(t => topicIds.Contains(t.Id))
@@ -77,8 +134,11 @@ public class StudyPlanService(IDbContextFactory<StudyDbContext> factory, StudyPl
             .GroupBy(l => l.CourseTopicId)
             .ToDictionary(g => g.Key, g => (IReadOnlyList<Card>)g.Select(l => l.Card!).ToList());
 
-        var input = topics.Select(t =>
-            new TopicCards(t, cardsByTopic.GetValueOrDefault(t.Id, [])));
+        var input = topics.Select(t => new TopicCards(
+            t,
+            cardsByTopic.GetValueOrDefault(t.Id, []),
+            foundationIds?.Contains(t.Id) ?? false,
+            requiredBy?.GetValueOrDefault(t.Id)));
 
         return policy.Build(input, targetDateUtc);
     }

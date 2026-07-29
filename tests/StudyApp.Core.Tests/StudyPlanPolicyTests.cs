@@ -180,4 +180,90 @@ public class StudyPlanPolicyTests
         Assert.Equal(3, plan.Items.Count);
         Assert.Equal(["None"], plan.Gaps.Select(g => g.Topic.Name));
     }
+
+    // --- foundations: topics pulled in through the prerequisite graph ---
+
+    private static TopicCards Foundation(CourseTopic topic, string[] requiredBy, params Card[] cards) =>
+        new(topic, cards, IsFoundation: true, RequiredBy: requiredBy);
+
+    [Fact]
+    public void Foundations_Are_Separated_From_What_Is_Actually_Assessed()
+    {
+        var plan = Policy.Build(
+        [
+            With(Topic("Banker's algorithm", TopicImportance.Core), Card(2)),
+            Foundation(Topic("Safe states"), ["Banker's algorithm"], Card(2)),
+            Foundation(Topic("Deadlock"), ["Banker's algorithm"]),
+        ], InTenDays);
+
+        Assert.Equal(["Banker's algorithm"], plan.Assessed.Select(i => i.Topic.Name));
+        Assert.Equal(["Deadlock", "Safe states"], plan.Foundations.Select(i => i.Topic.Name).Order());
+    }
+
+    /// <summary>
+    /// Items reads top to bottom in the order the plan is displayed, so a caller that ignores the
+    /// grouping still gets a sensible list. Assessed first, then the existing importance ordering
+    /// inside each group.
+    /// </summary>
+    [Fact]
+    public void Assessed_Topics_Come_Before_Foundations_However_Important()
+    {
+        var plan = Policy.Build(
+        [
+            Foundation(Topic("Core foundation", TopicImportance.Core), ["Peripheral assessed"]),
+            With(Topic("Peripheral assessed", TopicImportance.Peripheral)),
+        ], InTenDays);
+
+        Assert.Equal(["Peripheral assessed", "Core foundation"], plan.Items.Select(i => i.Topic.Name));
+    }
+
+    /// <summary>
+    /// The case foundations exist for: an assignment looks nearly ready, while something it rests
+    /// on has nothing behind it at all.
+    /// </summary>
+    [Fact]
+    public void A_Foundation_With_No_Cards_Is_Reported_As_Blocking()
+    {
+        var plan = Policy.Build(
+        [
+            With(Topic("Banker's algorithm", TopicImportance.Core), Card(40)),
+            Foundation(Topic("Safe states"), ["Banker's algorithm"]),
+        ], InTenDays);
+
+        var blocking = Assert.Single(plan.Items.Where(i => i.IsBlocking));
+        Assert.Equal("Safe states", blocking.Topic.Name);
+        Assert.Equal(["Banker's algorithm"], blocking.RequiredBy!);
+
+        // The assessed topic on its own would have read as entirely ready.
+        Assert.Equal(StudyAction.Ready, plan.Assessed.Single().Action);
+    }
+
+    [Fact]
+    public void A_Covered_Foundation_Does_Not_Block()
+    {
+        var plan = Policy.Build(
+        [
+            With(Topic("Banker's algorithm", TopicImportance.Core), Card(40)),
+            Foundation(Topic("Safe states"), ["Banker's algorithm"], Card(40)),
+        ], InTenDays);
+
+        Assert.DoesNotContain(plan.Items, i => i.IsBlocking);
+    }
+
+    /// <summary>
+    /// Counts answer "what stands between me and this assignment", so a foundation that needs
+    /// cards written counts just as much as an assessed topic that does.
+    /// </summary>
+    [Fact]
+    public void Summary_Counts_Include_Foundations()
+    {
+        var plan = Policy.Build(
+        [
+            With(Topic("Assessed", TopicImportance.Core), Card(40)),
+            Foundation(Topic("Underneath"), ["Assessed"]),
+        ], InTenDays);
+
+        Assert.Equal(1, plan.TopicsNeedingCards);
+        Assert.Equal(1, plan.TopicsReady);
+    }
 }
