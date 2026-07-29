@@ -48,6 +48,29 @@ public class MapRevisionPolicyTests
     }
 
     /// <summary>
+    /// A pin fixes how much a topic <i>matters</i>, not what it builds on. Blocking Relink here
+    /// would mean pinning a topic permanently froze it out of the learning path.
+    /// </summary>
+    [Fact]
+    public void Pinned_Topic_Can_Still_Gain_Prerequisites()
+    {
+        var pinned = Topic(pinned: true);
+        Assert.Null(Reason(Proposal(TopicChangeKind.Relink, pinned), pinned));
+    }
+
+    [Fact]
+    public void Relink_Is_Blocked_For_A_Dismissed_Or_Missing_Topic()
+    {
+        var dismissed = Topic(dismissed: true);
+        Assert.Equal("You dismissed this topic.",
+            Reason(Proposal(TopicChangeKind.Relink, dismissed), dismissed));
+
+        var gone = Topic();
+        Assert.Equal("The topic this changes no longer exists.",
+            Reason(Proposal(TopicChangeKind.Relink, gone)));
+    }
+
+    /// <summary>
     /// Dismissing must be permanent, or the user would have to redo it after every upload.
     /// </summary>
     [Fact]

@@ -50,6 +50,7 @@ public class CourseMapService(
 
         var topics = await db.CourseTopics.AsNoTracking()
             .Include(t => t.Sources)
+            .Include(t => t.Prerequisites)
             .Where(t => t.CourseId == job.CourseId)
             .OrderBy(t => t.Name)
             .ToListAsync(ct);
@@ -99,6 +100,8 @@ public class CourseMapService(
         if (topicRefs.Count == 0)
             return "(empty — this is the first mapping of this course)";
 
+        var refById = topicRefs.ToDictionary(x => x.Topic.Id, x => x.Ref);
+
         var sb = new StringBuilder();
         foreach (var (topic, reference) in topicRefs)
         {
@@ -110,7 +113,16 @@ public class CourseMapService(
                 { ImportancePinned: true } => " [PINNED by the student — do not propose reweighting]",
                 _ => "",
             };
-            sb.AppendLine($"- [{reference}] {topic.Name} — {topic.Importance.ToString().ToLowerInvariant()}{flags}");
+
+            // Dependencies already recorded are echoed back, or every re-map would propose the
+            // same links again and the review queue would fill with changes that change nothing.
+            var requires = topic.Prerequisites
+                .Select(p => refById.GetValueOrDefault(p.PrerequisiteTopicId))
+                .Where(r => r is not null)
+                .ToList();
+            var requiresText = requires.Count > 0 ? $" [requires: {string.Join(", ", requires)}]" : "";
+
+            sb.AppendLine($"- [{reference}] {topic.Name} — {topic.Importance.ToString().ToLowerInvariant()}{flags}{requiresText}");
             if (!string.IsNullOrWhiteSpace(topic.Summary))
                 sb.AppendLine($"    {topic.Summary}");
         }
@@ -248,11 +260,30 @@ public class CourseMapService(
                     })
                     .DistinctBy(s => (s.MaterialId, s.SourceReference, s.Mention))
                     .ToList(),
+                Prerequisites = ResolvePrerequisiteRefs(proposed, topicByRef),
             });
         }
 
         return revision;
     }
+
+    /// <summary>
+    /// Pins each prerequisite reference to whatever it can be pinned to now: an existing topic
+    /// becomes an id, and anything else is kept as a name for <see cref="ResolveEdgesAsync"/> to
+    /// match once the sibling proposal that creates it has been accepted.
+    ///
+    /// Names are kept verbatim rather than normalised, because they are matched against
+    /// <c>ProposedName</c> later and both sides have to agree.
+    /// </summary>
+    private static List<ProposedPrerequisite> ResolvePrerequisiteRefs(
+        MappedProposal proposed, Dictionary<string, Guid> topicByRef) =>
+        [.. (proposed.PrerequisiteRefs ?? [])
+            .Select(r => r?.Trim())
+            .Where(r => !string.IsNullOrWhiteSpace(r))
+            .Select(r => topicByRef.TryGetValue(r!, out var id)
+                ? new ProposedPrerequisite { TopicId = id }
+                : new ProposedPrerequisite { Name = r })
+            .DistinctBy(p => p.TopicId?.ToString() ?? p.Name!.ToLowerInvariant())];
 
     private static TopicChangeKind? ParseKind(string? kind) => kind?.Trim().ToLowerInvariant() switch
     {
@@ -260,6 +291,7 @@ public class CourseMapService(
         "reweight" => TopicChangeKind.Reweight,
         "merge" => TopicChangeKind.Merge,
         "retire" => TopicChangeKind.Retire,
+        "relink" => TopicChangeKind.Relink,
         _ => null,
     };
 
@@ -296,6 +328,7 @@ public class CourseMapService(
         await using var db = await factory.CreateDbContextAsync();
         return await db.CourseTopics.AsNoTracking()
             .Include(t => t.Sources).ThenInclude(s => s.Material)
+            .Include(t => t.Prerequisites)
             .Include(t => t.Unit)
             .Where(t => t.CourseId == courseId && (includeDismissed || !t.IsDismissed))
             .OrderByDescending(t => t.Importance)
@@ -323,6 +356,7 @@ public class CourseMapService(
         var courseId = proposal.Revision!.CourseId;
         var topics = await db.CourseTopics
             .Include(t => t.Sources)
+            .Include(t => t.Prerequisites)
             .Where(t => t.CourseId == courseId)
             .ToListAsync(ct);
 
@@ -338,7 +372,7 @@ public class CourseMapService(
         switch (proposal.Kind)
         {
             case TopicChangeKind.Add:
-                db.CourseTopics.Add(new CourseTopic
+                var created = new CourseTopic
                 {
                     CourseId = courseId,
                     Name = proposal.ProposedName,
@@ -348,7 +382,13 @@ public class CourseMapService(
                     UnitId = proposal.ProposedUnitId,
                     LastChangedAt = now,
                     Sources = ToSources(proposal.Sources),
-                });
+                };
+                db.CourseTopics.Add(created);
+                topics.Add(created);
+                // Record what this proposal produced. Edges are resolved in a second pass over the
+                // whole revision, and that pass needs a way to find the topic an Add created —
+                // including for a sibling proposal accepted before this one.
+                proposal.CourseTopicId = created.Id;
                 break;
 
             case TopicChangeKind.Reweight:
@@ -378,6 +418,7 @@ public class CourseMapService(
                     })
                     .Concat(proposal.Sources);
                 db.TopicSources.AddRange(NewSourcesFor(survivor, carriedOver));
+                RewireEdgesForMerge(db, topics, absorbed.Id, survivor.Id);
                 survivor.LastChangedAt = now;
                 absorbed.IsDeleted = true;
                 break;
@@ -390,12 +431,131 @@ public class CourseMapService(
                 retired.LastChangedAt = now;
                 retired.ImportanceReason = proposal.Reason;
                 break;
+
+            case TopicChangeKind.Relink:
+                // Nothing to change on the topic itself — the dependencies are written by the
+                // resolution pass below, which every kind goes through.
+                topics.First(t => t.Id == proposal.CourseTopicId).LastChangedAt = now;
+                break;
         }
 
         proposal.Status = ProposalStatus.Accepted;
+        await ResolveEdgesAsync(db, proposal.RevisionId, topics, ct);
         await db.SaveChangesAsync(ct);
         await CloseRevisionIfSettledAsync(db, proposal.RevisionId, ct);
         return null;
+    }
+
+    /// <summary>
+    /// Writes every dependency the revision's accepted proposals ask for that can be resolved
+    /// right now, and can safely be run again.
+    ///
+    /// It has to be a pass over the whole revision rather than work done inside each accept,
+    /// because "Accept all" walks proposals ordered by kind and name: a topic's prerequisite is
+    /// routinely accepted <i>after</i> the topic that needs it, and a single forward pass would
+    /// silently drop that edge. Re-running after each accept picks up whatever has since become
+    /// resolvable, and adds nothing twice.
+    /// </summary>
+    private static async Task ResolveEdgesAsync(
+        StudyDbContext db, Guid revisionId, List<CourseTopic> topics, CancellationToken ct)
+    {
+        var accepted = await db.TopicProposals
+            .Where(p => p.RevisionId == revisionId && p.Status == ProposalStatus.Accepted)
+            .ToListAsync(ct);
+
+        if (accepted.TrueForAll(p => p.Prerequisites.Count == 0))
+            return;
+
+        var live = topics.Where(t => !t.IsDeleted).ToList();
+        var byId = live.Select(t => t.Id).ToHashSet();
+        var byName = live
+            .GroupBy(t => t.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+
+        var edges = topics
+            .SelectMany(t => t.Prerequisites)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToList();
+
+        foreach (var proposal in accepted)
+        {
+            // Merge folds its dependencies onto the survivor; a retired topic gets none.
+            var dependent = proposal.Kind switch
+            {
+                TopicChangeKind.Merge => proposal.MergeIntoTopicId,
+                TopicChangeKind.Retire => null,
+                _ => proposal.CourseTopicId,
+            };
+
+            if (dependent is not { } dependentId || !byId.Contains(dependentId))
+                continue;
+
+            foreach (var wanted in proposal.Prerequisites)
+            {
+                // A name resolves only once the sibling proposal that creates that topic has been
+                // accepted; until then the edge is simply skipped and picked up on a later pass.
+                var target = wanted.TopicId is { } id && byId.Contains(id)
+                    ? id
+                    : wanted.Name is { } name && byName.TryGetValue(name.Trim(), out var found)
+                        ? found
+                        : (Guid?)null;
+
+                if (target is { } prerequisiteId)
+                    AddEdgeIfSafe(db, edges, dependentId, prerequisiteId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Records a dependency unless it already exists, points at itself, or would close a loop.
+    /// Returns whether anything was added.
+    ///
+    /// Rows go in through the DbSet, never onto a tracked topic's collection — the same rule
+    /// <see cref="NewSourcesFor"/> documents. <paramref name="edges"/> is updated in step so the
+    /// cycle check sees edges added earlier in the same pass.
+    /// </summary>
+    private static bool AddEdgeIfSafe(
+        StudyDbContext db, List<TopicEdge> edges, Guid dependentId, Guid prerequisiteId)
+    {
+        if (dependentId == prerequisiteId)
+            return false;
+        if (edges.Contains(new TopicEdge(dependentId, prerequisiteId)))
+            return false;
+        if (PrerequisiteGraph.WouldCycle(edges, dependentId, prerequisiteId))
+            return false;
+
+        db.TopicPrerequisites.Add(new TopicPrerequisite
+        {
+            CourseTopicId = dependentId,
+            PrerequisiteTopicId = prerequisiteId,
+        });
+        edges.Add(new TopicEdge(dependentId, prerequisiteId));
+        return true;
+    }
+
+    /// <summary>
+    /// Moves an absorbed topic's dependencies onto the survivor, in both directions.
+    ///
+    /// Without this, merging two names for one concept silently severs every path through it: what
+    /// the absorbed topic rested on, and everything that rested on it, would both lose their link.
+    /// The absorbed topic's own rows are left alone — it is soft-deleted, and the query filter
+    /// already stops them counting.
+    /// </summary>
+    private static void RewireEdgesForMerge(
+        StudyDbContext db, List<CourseTopic> topics, Guid absorbedId, Guid survivorId)
+    {
+        var edges = topics
+            .SelectMany(t => t.Prerequisites)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToList();
+
+        // What the absorbed topic needed, the survivor now needs.
+        foreach (var prerequisiteId in edges.Where(e => e.TopicId == absorbedId).Select(e => e.PrerequisiteId).ToList())
+            AddEdgeIfSafe(db, edges, survivorId, prerequisiteId);
+
+        // What needed the absorbed topic now needs the survivor.
+        foreach (var dependentId in edges.Where(e => e.PrerequisiteId == absorbedId).Select(e => e.TopicId).ToList())
+            AddEdgeIfSafe(db, edges, dependentId, survivorId);
     }
 
     public async Task RejectProposalAsync(Guid proposalId, CancellationToken ct = default)
@@ -447,6 +607,61 @@ public class CourseMapService(
         foreach (var proposal in revision.Proposals.Where(p => p.Status == ProposalStatus.Pending))
             proposal.Status = ProposalStatus.Rejected;
         revision.Status = RevisionStatus.Discarded;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Records a dependency by hand. Returns null on success, or why it was refused.
+    ///
+    /// Editable for the same reason importance is: a wrong edge would otherwise cost an API call
+    /// to correct, and one bad link distorts the whole learning path below it.
+    /// </summary>
+    public async Task<string?> AddPrerequisiteAsync(
+        Guid topicId, Guid prerequisiteId, CancellationToken ct = default)
+    {
+        if (topicId == prerequisiteId)
+            return "A topic cannot be its own prerequisite.";
+
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var topic = await db.CourseTopics.FirstOrDefaultAsync(t => t.Id == topicId, ct);
+        var prerequisite = await db.CourseTopics.FirstOrDefaultAsync(t => t.Id == prerequisiteId, ct);
+        if (topic is null || prerequisite is null)
+            return "That topic no longer exists.";
+
+        var edges = await db.TopicPrerequisites.AsNoTracking()
+            .Where(p => p.Topic!.CourseId == topic.CourseId)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToListAsync(ct);
+
+        if (edges.Contains(new TopicEdge(topicId, prerequisiteId)))
+            return null;
+
+        if (PrerequisiteGraph.WouldCycle(edges, topicId, prerequisiteId))
+            return $"That would make “{topic.Name}” and “{prerequisite.Name}” each depend on the other.";
+
+        db.TopicPrerequisites.Add(new TopicPrerequisite
+        {
+            CourseTopicId = topicId,
+            PrerequisiteTopicId = prerequisiteId,
+        });
+        await db.SaveChangesAsync(ct);
+        return null;
+    }
+
+    public async Task RemovePrerequisiteAsync(
+        Guid topicId, Guid prerequisiteId, CancellationToken ct = default)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+        var edge = await db.TopicPrerequisites.FirstOrDefaultAsync(
+            p => p.CourseTopicId == topicId && p.PrerequisiteTopicId == prerequisiteId, ct);
+        if (edge is null)
+            return;
+
+        // A hard delete, unlike everything else here: the row carries no information of its own,
+        // so there is nothing to preserve, and a soft-deleted edge would block re-adding the same
+        // dependency later — the composite key is the whole row.
+        db.TopicPrerequisites.Remove(edge);
         await db.SaveChangesAsync(ct);
     }
 

@@ -69,6 +69,9 @@ public class CourseTopic : ITimestamped
 
     public List<TopicSource> Sources { get; set; } = [];
 
+    /// <summary>Topics that have to be understood before this one. See <see cref="TopicPrerequisite"/>.</summary>
+    public List<TopicPrerequisite> Prerequisites { get; set; } = [];
+
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public bool IsDeleted { get; set; }

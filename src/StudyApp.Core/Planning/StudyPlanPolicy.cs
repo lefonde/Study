@@ -21,7 +21,15 @@ public record TopicPlanItem(
     int CardCount,
     int CardsNeedingWork,
     double Mastery,
-    double RecallNow);
+    double RecallNow,
+    /// <summary>The assignment doesn't assess this — something it assesses depends on it.</summary>
+    bool IsFoundation = false,
+    /// <summary>Assessed topics this one is underneath, for "blocks X".</summary>
+    IReadOnlyList<string>? RequiredBy = null)
+{
+    /// <summary>A foundation with nothing behind it stops the topics above it being learnable.</summary>
+    public bool IsBlocking => IsFoundation && Action == StudyAction.WriteCards;
+}
 
 /// <summary>What stands between you and an assignment.</summary>
 public record StudyPlan(
@@ -38,10 +46,26 @@ public record StudyPlan(
 
     /// <summary>Topics the assignment assesses that you have nothing at all for.</summary>
     public IEnumerable<TopicPlanItem> Gaps => Items.Where(i => i.Action == StudyAction.WriteCards);
+
+    /// <summary>What the assignment's own material tests.</summary>
+    public IEnumerable<TopicPlanItem> Assessed => Items.Where(i => !i.IsFoundation);
+
+    /// <summary>What those rest on, pulled in through the prerequisite graph.</summary>
+    public IEnumerable<TopicPlanItem> Foundations => Items.Where(i => i.IsFoundation);
 }
 
-/// <summary>The topic and the cards that teach it — the input the plan is built from.</summary>
-public record TopicCards(CourseTopic Topic, IReadOnlyList<Card> Cards);
+/// <summary>
+/// The topic and the cards that teach it — the input the plan is built from.
+///
+/// <paramref name="IsFoundation"/> and <paramref name="RequiredBy"/> are defaulted so the common
+/// case reads unchanged; they are set only when a topic was pulled in as a prerequisite of
+/// something the assignment actually assesses.
+/// </summary>
+public record TopicCards(
+    CourseTopic Topic,
+    IReadOnlyList<Card> Cards,
+    bool IsFoundation = false,
+    IReadOnlyList<string>? RequiredBy = null);
 
 /// <summary>
 /// Turns "Maman 12 is in nine days" into a list of what to actually do.
@@ -65,7 +89,11 @@ public class StudyPlanPolicy(ProgressPolicy progress, TimeProvider timeProvider)
         var items = topics
             .Where(t => !t.Topic.IsDismissed)
             .Select(t => Assess(t, targetDateUtc))
-            .OrderByDescending(i => i.Topic.Importance)
+            // Assessed topics before foundations, so Items reads top to bottom in the order the
+            // plan is displayed. Within each group the existing importance → severity → mastery
+            // ordering is unchanged.
+            .OrderBy(i => i.IsFoundation)
+            .ThenByDescending(i => i.Topic.Importance)
             .ThenBy(i => i.Action)
             .ThenBy(i => i.Mastery)
             .ThenBy(i => i.Topic.Name, StringComparer.CurrentCultureIgnoreCase)
@@ -83,7 +111,9 @@ public class StudyPlanPolicy(ProgressPolicy progress, TimeProvider timeProvider)
         var cards = topic.Cards;
         if (cards.Count == 0)
         {
-            return new TopicPlanItem(topic.Topic, StudyAction.WriteCards, 0, 0, 0, 0);
+            return new TopicPlanItem(
+                topic.Topic, StudyAction.WriteCards, 0, 0, 0, 0,
+                topic.IsFoundation, topic.RequiredBy);
         }
 
         var report = progress.Aggregate(cards);
@@ -95,7 +125,9 @@ public class StudyPlanPolicy(ProgressPolicy progress, TimeProvider timeProvider)
             cards.Count,
             needingWork,
             report.Mastery,
-            report.RecallNow);
+            report.RecallNow,
+            topic.IsFoundation,
+            topic.RequiredBy);
     }
 
     /// <summary>

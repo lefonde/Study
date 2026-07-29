@@ -20,6 +20,7 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<CourseMapRevision> CourseMapRevisions => Set<CourseMapRevision>();
     public DbSet<TopicProposal> TopicProposals => Set<TopicProposal>();
     public DbSet<CardTopic> CardTopics => Set<CardTopic>();
+    public DbSet<TopicPrerequisite> TopicPrerequisites => Set<TopicPrerequisite>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -229,6 +230,32 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         // Written with the proposal, read once when applying, never queried alone — unlike the
         // TopicSource rows it becomes.
         modelBuilder.Entity<TopicProposal>().OwnsMany(p => p.Sources, b => b.ToJson());
+        modelBuilder.Entity<TopicProposal>().OwnsMany(p => p.Prerequisites, b => b.ToJson());
+
+        // Composite key, like CardTopic: an edge has no identity beyond the pair it joins, and
+        // the key is what stops the same dependency being recorded twice.
+        modelBuilder.Entity<TopicPrerequisite>()
+            .HasKey(p => new { p.CourseTopicId, p.PrerequisiteTopicId });
+
+        modelBuilder.Entity<TopicPrerequisite>()
+            .HasOne(p => p.Topic)
+            .WithMany(t => t.Prerequisites)
+            .HasForeignKey(p => p.CourseTopicId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // NoAction on this side only: both ends point at CourseTopic, and two cascade paths into
+        // one table is ambiguous. Topics are never hard-deleted anyway — a merge soft-deletes the
+        // absorbed topic after rewiring its edges onto the survivor — so nothing relies on it.
+        modelBuilder.Entity<TopicPrerequisite>()
+            .HasOne(p => p.Prerequisite)
+            .WithMany()
+            .HasForeignKey(p => p.PrerequisiteTopicId)
+            .OnDelete(DeleteBehavior.NoAction);
+
+        // An edge to or from a removed topic is not a dependency: it would place topics in stages
+        // behind something that no longer exists.
+        modelBuilder.Entity<TopicPrerequisite>()
+            .HasQueryFilter(p => !p.Topic!.IsDeleted && !p.Prerequisite!.IsDeleted);
 
         // Composite key: the pair IS the fact, so a card can never be linked to one topic twice.
         modelBuilder.Entity<CardTopic>().HasKey(ct => new { ct.CardId, ct.CourseTopicId });
@@ -280,6 +307,9 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         modelBuilder.Entity<CourseMapRevision>().HasIndex(r => new { r.CourseId, r.Status });
         // Coverage counts cards per topic; the composite PK already covers the other direction.
         modelBuilder.Entity<CardTopic>().HasIndex(ct => ct.CourseTopicId);
+        // "What does this topic unlock?" — the reverse of the composite PK, used when a merge
+        // rewires edges and when the map draws outgoing arrows.
+        modelBuilder.Entity<TopicPrerequisite>().HasIndex(p => p.PrerequisiteTopicId);
         modelBuilder.Entity<GenerationJob>().PrimitiveCollection(j => j.TargetTopicIds);
     }
 }

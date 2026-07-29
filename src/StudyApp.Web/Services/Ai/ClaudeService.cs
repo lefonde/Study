@@ -50,7 +50,10 @@ public record MappedProposal(
     [property: JsonPropertyName("importance")] string Importance,
     [property: JsonPropertyName("reason")] string Reason,
     [property: JsonPropertyName("mergeIntoRef")] string? MergeIntoRef,
-    [property: JsonPropertyName("sources")] List<MappedSource> Sources);
+    [property: JsonPropertyName("sources")] List<MappedSource> Sources,
+    // Either an existing topic ref (T1) or the exact name of another topic proposed in the same
+    // response — a new topic can depend on another new one, which has no ref yet.
+    [property: JsonPropertyName("prerequisiteRefs")] List<string> PrerequisiteRefs);
 
 public record MapResult(
     [property: JsonPropertyName("summary")] string Summary,
@@ -192,6 +195,9 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         - merge     — two entries that are the same concept. topicRef is absorbed into
                       mergeIntoRef; keep the better-established name as the survivor.
         - retire    — no material supports this any more.
+        - relink    — an existing topic whose prerequisites are missing or wrong. Changes nothing
+                      but the dependencies; repeat its current name, summary and importance
+                      unchanged. This is how an already-mapped course gets its learning path.
 
         If nothing changed, return an empty proposals list. That is a valid and useful answer —
         do not invent churn to look productive.
@@ -212,6 +218,21 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         mention = assessed (a question tests it) | defined (it is taught or defined here) |
         referenced (mentioned in passing).
 
+        prerequisiteRefs: what a student must already understand for this topic to make sense.
+        This is what lets the app lay the course out as a path to follow, so it has to mean
+        dependency, not association.
+        - Include it only if the topic is genuinely unteachable first: "you cannot follow the
+          Banker's algorithm without safe states". Not "these are related", and not "this came
+          earlier in the book" — order of presentation is not dependency.
+        - Each entry is an existing ref (T1…) or the exact `name` of another topic proposed in
+          this same response, copied character for character.
+        - Most topics have none to three. The topics a course opens with have none at all; if
+          everything has a prerequisite, you have recorded reading order rather than structure.
+        - Never point a topic at itself, and never create a loop: if A requires B then B must not
+          require A, directly or through any chain.
+        - On a relink, list the topic's prerequisites in full — the list replaces nothing, so
+          repeat the ones already shown as [requires: …] rather than only the new ones.
+
         Other rules:
         - Use the course's own language. Never translate a Hebrew topic into English.
         - Name topics as concepts ("Banker's algorithm"), not as document headings
@@ -231,13 +252,18 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
               "items": {
                 "type": "object",
                 "properties": {
-                  "kind": { "type": "string", "enum": ["add", "reweight", "merge", "retire"] },
+                  "kind": { "type": "string", "enum": ["add", "reweight", "merge", "retire", "relink"] },
                   "topicRef": { "type": "string", "description": "Existing topic ref (T1). Empty for add." },
                   "name": { "type": "string" },
                   "summary": { "type": "string" },
                   "importance": { "type": "string", "enum": ["core", "supporting", "peripheral"] },
                   "reason": { "type": "string" },
                   "mergeIntoRef": { "type": "string", "description": "Surviving topic ref for a merge. Empty otherwise." },
+                  "prerequisiteRefs": {
+                    "type": "array",
+                    "description": "Topics that must be understood before this one. Each is either an existing ref (T1) or the exact name of another topic proposed in this same response. Empty for foundational topics.",
+                    "items": { "type": "string" }
+                  },
                   "sources": {
                     "type": "array",
                     "items": {
@@ -252,7 +278,7 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
                     }
                   }
                 },
-                "required": ["kind", "topicRef", "name", "summary", "importance", "reason", "mergeIntoRef", "sources"],
+                "required": ["kind", "topicRef", "name", "summary", "importance", "reason", "mergeIntoRef", "prerequisiteRefs", "sources"],
                 "additionalProperties": false
               }
             }

@@ -876,6 +876,11 @@ else
                 </div>
             }
 
+            @if (_prerequisiteError is { } prereqError)
+            {
+                <div class="alert alert-warning py-2 small">@prereqError</div>
+            }
+
             <div class="d-flex gap-3 mb-2 small text-muted">
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Core)</strong> core</span>
                 <span><strong>@_topics.Count(t => t.Importance == TopicImportance.Supporting)</strong> supporting</span>
@@ -920,6 +925,48 @@ else
                                 {
                                     <div class="small fst-italic map-md md-content" dir="auto">@Md(topic.ImportanceReason)</div>
                                 }
+                                @* What this topic builds on. Shown as text here; the map view
+                                   draws the same edges as lines. *@
+                                <div class="small mt-1">
+                                    @if (topic.Prerequisites.Count > 0)
+                                    {
+                                        <span class="text-muted me-1" title="Learn these first">⟵ builds on</span>
+                                        @foreach (var edge in topic.Prerequisites)
+                                        {
+                                            <span class="badge text-bg-light border me-1 md-content" dir="auto">
+                                                @MdInline(TopicName(edge.PrerequisiteTopicId))
+                                                @if (_editingPrerequisitesFor == topic.Id)
+                                                {
+                                                    <button class="btn btn-sm btn-link p-0 ms-1 align-baseline text-danger"
+                                                            title="Remove this dependency"
+                                                            @onclick="() => RemovePrerequisiteAsync(topic.Id, edge.PrerequisiteTopicId)">✕</button>
+                                                }
+                                            </span>
+                                        }
+                                    }
+                                    @if (_editingPrerequisitesFor == topic.Id)
+                                    {
+                                        <select class="form-select form-select-sm d-inline-block mt-1" style="width: auto;"
+                                                @onchange="e => AddPrerequisiteAsync(topic.Id, (string?)e.Value)">
+                                            <option value="">Add a prerequisite…</option>
+                                            @foreach (var other in _topics.Where(t => t.Id != topic.Id
+                                                && topic.Prerequisites.All(p => p.PrerequisiteTopicId != t.Id)))
+                                            {
+                                                <option value="@other.Id">@other.Name</option>
+                                            }
+                                        </select>
+                                        <button class="btn btn-sm btn-link p-0 ms-2 align-baseline"
+                                                @onclick="() => _editingPrerequisitesFor = null">done</button>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-link p-0 align-baseline text-muted"
+                                                title="Say what this topic builds on"
+                                                @onclick="() => { _editingPrerequisitesFor = topic.Id; _prerequisiteError = null; }">
+                                            @(topic.Prerequisites.Count > 0 ? "edit" : "⟵ set prerequisites")
+                                        </button>
+                                    }
+                                </div>
                                 @if (topic.Sources.Count > 0)
                                 {
                                     <div class="small text-muted mt-1">
@@ -1150,6 +1197,8 @@ else
     private CourseMapRevision? _pendingRevision;
     private List<string> _blockedReasons = [];
     private int _unmappedMaterialCount;
+    private string? _prerequisiteError;
+    private Guid? _editingPrerequisitesFor;
 
     private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
     private Guid? _expandedPlanId;
@@ -1661,6 +1710,7 @@ else
         TopicChangeKind.Add => "text-bg-success",
         TopicChangeKind.Reweight => "text-bg-info",
         TopicChangeKind.Merge => "text-bg-primary",
+        TopicChangeKind.Relink => "text-bg-dark",
         _ => "text-bg-secondary",
     };
 
@@ -1670,8 +1720,29 @@ else
         TopicChangeKind.Add => "Adds a topic the map didn't have.",
         TopicChangeKind.Reweight => "Changes how important an existing topic is — new material says so.",
         TopicChangeKind.Merge => "Folds two entries that turned out to be the same concept into one.",
+        TopicChangeKind.Relink => "Records what this topic builds on, placing it in the learning path. Nothing else about it changes.",
         _ => "Sets a topic aside — no material supports it any more. It isn't deleted.",
     };
+
+    private string TopicName(Guid topicId) =>
+        _topics.FirstOrDefault(t => t.Id == topicId)?.Name ?? "(dismissed)";
+
+    private async Task AddPrerequisiteAsync(Guid topicId, string? prerequisiteId)
+    {
+        _prerequisiteError = null;
+        if (!Guid.TryParse(prerequisiteId, out var target))
+            return;
+
+        _prerequisiteError = await CourseMapService.AddPrerequisiteAsync(topicId, target);
+        await ReloadAsync();
+    }
+
+    private async Task RemovePrerequisiteAsync(Guid topicId, Guid prerequisiteId)
+    {
+        _prerequisiteError = null;
+        await CourseMapService.RemovePrerequisiteAsync(topicId, prerequisiteId);
+        await ReloadAsync();
+    }
 
     private static string PlanActionBadge(StudyAction action) => action switch
     {

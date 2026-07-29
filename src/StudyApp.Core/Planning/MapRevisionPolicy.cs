@@ -55,6 +55,10 @@ public static class MapRevisionPolicy
             TopicChangeKind.Retire when target.ImportancePinned =>
                 "You pinned this topic's importance.",
             TopicChangeKind.Merge => MergeBlockedReason(proposal, targetId, topicsById),
+            // Relink is deliberately NOT blocked by a pin. Pinning fixes how much a topic matters;
+            // it says nothing about what the topic builds on, and a pinned topic can perfectly
+            // well gain a prerequisite the map only just learned about.
+            TopicChangeKind.Relink => null,
             _ => null,
         };
     }

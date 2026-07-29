@@ -17,6 +17,14 @@ public enum TopicChangeKind
     Merge = 2,
     /// <summary>A topic no longer supported by any material — proposed for dismissal, never deleted.</summary>
     Retire = 3,
+    /// <summary>
+    /// Records what an existing topic builds on, changing nothing else about it.
+    ///
+    /// Its own kind rather than a variant of Reweight, because on an already-mapped course a
+    /// re-map has nothing to add or re-weight — without this there would be no way for
+    /// dependencies to ever arrive.
+    /// </summary>
+    Relink = 4,
 }
 
 public enum ProposalStatus
@@ -88,6 +96,9 @@ public class TopicProposal : ITimestamped
     /// </summary>
     public List<ProposedSource> Sources { get; set; } = [];
 
+    /// <summary>What this topic should be recorded as building on. Owned JSON, like Sources.</summary>
+    public List<ProposedPrerequisite> Prerequisites { get; set; } = [];
+
     public ProposalStatus Status { get; set; } = ProposalStatus.Pending;
 
     public DateTime CreatedAt { get; set; }
@@ -101,4 +112,18 @@ public class ProposedSource
     public Guid MaterialId { get; set; }
     public string? SourceReference { get; set; }
     public TopicMention Mention { get; set; }
+}
+
+/// <summary>
+/// A <see cref="TopicPrerequisite"/> before its proposal is accepted.
+///
+/// Two ways to point at the target, because a proposed topic can depend on another topic proposed
+/// in the same run, which has no id yet: a reference to something that already exists is pinned to
+/// its <see cref="TopicId"/>, while a reference to a sibling proposal keeps its
+/// <see cref="Name"/> and is resolved once that sibling has been accepted.
+/// </summary>
+public class ProposedPrerequisite
+{
+    public Guid? TopicId { get; set; }
+    public string? Name { get; set; }
 }
