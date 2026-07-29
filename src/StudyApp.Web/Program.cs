@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
+using StudyApp.Core.Planning;
 using StudyApp.Core.Scheduling;
 using StudyApp.Web;
 using StudyApp.Web.Components;
@@ -166,6 +167,9 @@ builder.Services.AddScoped<MaterialService>();
 builder.Services.AddSingleton<ProgressPolicy>();
 builder.Services.AddScoped<ProgressService>();
 builder.Services.AddScoped<ProgressSnapshotService>();
+// Pure planning logic, so a singleton policy plus a scoped service over the DbContext factory.
+builder.Services.AddSingleton<StudyPlanPolicy>();
+builder.Services.AddScoped<StudyPlanService>();
 
 // AI pipeline. The runner is a singleton BackgroundService; the per-job services are scoped
 // because they use the DbContext factory and are resolved per job.

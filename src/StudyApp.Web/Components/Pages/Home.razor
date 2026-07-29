@@ -2,6 +2,8 @@
 @inject ReviewService ReviewService
 @inject MaterialService MaterialService
 @inject ProgressService ProgressService
+@inject StudyPlanService StudyPlanService
+@using StudyApp.Core.Planning
 
 <PageTitle>StudyApp — Home</PageTitle>
 
@@ -62,8 +64,38 @@ else
                         </span>
                         <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
                     </div>
-                    @if (_assignmentForecasts.TryGetValue(a.Id, out var forecast) && forecast.AlreadyDurable + forecast.WillLapseBeforeTarget > 0)
+                    @if (_assignmentPlans.TryGetValue(a.Id, out var plan))
                     {
+                        @* The map knows what this assignment assesses, so this is a specific
+                           statement about that assignment rather than a course-wide guess. *@
+                        <div class="small mt-1">
+                            @if (plan.TopicsNeedingCards > 0)
+                            {
+                                <span class="badge text-bg-danger me-1">
+                                    @plan.TopicsNeedingCards topic@(plan.TopicsNeedingCards == 1 ? "" : "s") with no cards
+                                </span>
+                            }
+                            @if (plan.TopicsNeedingReview > 0)
+                            {
+                                <span class="badge text-bg-warning me-1">
+                                    @plan.CardsNeedingWork card@(plan.CardsNeedingWork == 1 ? "" : "s") to review
+                                </span>
+                            }
+                            @if (plan.TopicsReady > 0)
+                            {
+                                <span class="badge text-bg-success me-1">@plan.TopicsReady ready</span>
+                            }
+                            @if (plan.Gaps.Any())
+                            {
+                                <span class="text-muted">
+                                    Start with @string.Join(", ", plan.Gaps.Take(3).Select(g => g.Topic.Name))@(plan.TopicsNeedingCards > 3 ? "…" : "")
+                                </span>
+                            }
+                        </div>
+                    }
+                    else if (_assignmentForecasts.TryGetValue(a.Id, out var forecast) && forecast.AlreadyDurable + forecast.WillLapseBeforeTarget > 0)
+                    {
+                        @* No map yet for this course, so fall back to the course-wide projection. *@
                         <div class="text-muted small mt-1">
                             If you keep up reviews, ~@Pct(forecast.ProjectedMastery) of @a.Course?.Name will likely be
                             durable by then (@forecast.WillLapseBeforeTarget card@(forecast.WillLapseBeforeTarget == 1 ? "" : "s") still need review before).
@@ -127,6 +159,7 @@ else
     private List<Material> _upcomingAssignments = [];
     private Dictionary<Guid, ProgressReport> _courseProgress = [];
     private Dictionary<Guid, ProgressForecast> _assignmentForecasts = [];
+    private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -139,8 +172,15 @@ else
             _courseProgress[course.CourseId] = await ProgressService.GetCourseProgressAsync(course.CourseId);
 
         foreach (var assignment in _upcomingAssignments.Where(a => a.DueDate is not null))
-            _assignmentForecasts[assignment.Id] =
-                await ProgressService.GetCourseForecastAsync(assignment.CourseId, assignment.DueDate!.Value);
+        {
+            // Prefer the map-derived plan; the course-wide forecast is the fallback for a course
+            // that hasn't been mapped yet.
+            if (await StudyPlanService.GetForAssignmentAsync(assignment.Id) is { } plan)
+                _assignmentPlans[assignment.Id] = plan;
+            else
+                _assignmentForecasts[assignment.Id] =
+                    await ProgressService.GetCourseForecastAsync(assignment.CourseId, assignment.DueDate!.Value);
+        }
     }
 
     private static string Pct(double fraction) => $"{fraction * 100:0}%";

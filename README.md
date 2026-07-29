@@ -176,17 +176,49 @@ assignment, $5–10 for a full textbook, well under $1 for a generation run).
 3. Open the deck → **bulk import**: paste one card per line — `front<TAB>back`, `front :: back`, or `front;back`. Preview shows duplicates and skipped lines before committing.
 4. **Home** → Start review. Space reveals, 1–4 grades (Again/Hard/Good/Easy), ↩ undoes the last grade. New cards are capped at 20 per session; "Again" cards repeat until you pass them.
 
+## Mapping a course
+
+Once a course's material is in, the **Map** tab turns it into a model of what the course covers
+and what matters in it.
+
+1. **Materials** → select as many files as you like at once, upload, then **Ingest all**. The
+   estimate shown before you confirm is a wide range on purpose — real cost tracks page count,
+   which is only knowable by opening the file.
+2. Set **what this course is graded on** (same tab). Defaults rank exams above assignments above
+   lecture notes; change it if your course doesn't work that way. This is what decides which
+   topics come out as *core*, so it's worth a moment.
+3. **Map** → *Map this course*. Every proposed topic is reviewed before it applies.
+4. **Link cards** — connects existing cards to the topics they teach, so coverage counts them.
+   Only ever sends cards that aren't linked yet, so re-running it later is cheap.
+
+After that the Map tab shows **coverage beside mastery**. They answer different questions and are
+never blended: low coverage means write more cards, low mastery means study the ones you have.
+*Core covered* is the number to act on — overall coverage counts peripheral topics and can look
+fine while everything examinable has nothing behind it.
+
+**Generate cards for the gaps** writes cards only for topics that have none, drawing on the
+material those topics cite. A topic with no supporting source is left empty rather than filled
+with invented material — a card that hides a gap is worse than the gap.
+
+Upload a past exam later and **re-map**: the emphasis legitimately shifts, and you review that
+shift before it lands. Topics keep their identity across a re-map, so cards stay attached.
+**📌 Pin** a topic to fix its importance yourself — re-mapping will never override it.
+
+Give an assignment a **due date** and its **📋 Plan** says what stands between you and it:
+topics with no cards first, then what needs review, then what already holds past the deadline.
+That one is pure arithmetic over the map — no API call, no cost.
+
 ## Roadmap (deliberately deferred)
 
 - ✅ v0.2: course structure (chapters/lessons + "you are here"), material uploads, markdown/LaTeX/RTL card rendering
 - ✅ v0.3: AI ingestion → reusable extracts → card generation into a review inbox
 - ✅ v0.4: config-gated auth (password + Google/GitHub); progress tracking (mastery/recall, rolling
   deck → unit → course); `/how-it-works` explaining the scheduling and progress math
-- next — **the course map**: upload a course's material in bulk, ingest it all, and derive one
-  weighted model of what the course covers. Importance is driven by what the course actually
-  assesses, with per-course weights (some courses live or die by the final; others by weekly
-  assignments). The map revises itself as new material lands — and every revision is reviewed
-  before it applies. Then: coverage-aware card generation, a study plan against assignment due
-  dates, and practice exams after that.
+- ✅ v0.5: **the course map** — bulk upload and ingest a whole course, derive one weighted model
+  of what it covers (importance driven by what the course *assesses*, with per-course weights),
+  revised under review as new material lands; coverage reported beside mastery; card generation
+  aimed at the gaps; and a study plan against assignment due dates
+- next: **practice exams** generated from what the course actually assesses — the reason
+  assessment materials keep their full text and `TopicMention.Assessed` is recorded
 - Scheduler: SM-2 today behind an `IScheduler` seam; FSRS is a drop-in swap later — though FSRS
   fits itself to your review history, so it only starts paying off once there's a real one.

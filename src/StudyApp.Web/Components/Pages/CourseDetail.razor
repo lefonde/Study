@@ -9,6 +9,7 @@
 @inject AiJobService AiJobService
 @inject CourseMapService CourseMapService
 @inject CoverageService CoverageService
+@inject StudyPlanService StudyPlanService
 @using StudyApp.Core.Planning
 @inject SuggestionService SuggestionService
 @inject NavigationManager Nav
@@ -528,6 +529,13 @@ else
                                     }
                                 </td>
                                 <td class="text-nowrap">
+                                    @if (_assignmentPlans.ContainsKey(m.Id))
+                                    {
+                                        <button class="btn btn-sm btn-outline-primary me-1"
+                                                @onclick="() => _expandedPlanId = _expandedPlanId == m.Id ? null : m.Id">
+                                            @(_expandedPlanId == m.Id ? "Hide plan" : "📋 Plan")
+                                        </button>
+                                    }
                                     @if (AiOptions.IsConfigured)
                                     {
                                         @if (m.Status == MaterialStatus.Ingested)
@@ -549,6 +557,44 @@ else
                                     <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteMaterialAsync(m.Id)">✕</button>
                                 </td>
                             </tr>
+                            @if (_expandedPlanId == m.Id && _assignmentPlans.TryGetValue(m.Id, out var plan))
+                            {
+                                <tr>
+                                    <td colspan="7" class="bg-body-tertiary">
+                                        <div class="fw-semibold mb-1">
+                                            What to do before @m.Title
+                                            <span class="text-muted small">
+                                                — @plan.DaysRemaining day@(plan.DaysRemaining == 1 ? "" : "s") left,
+                                                @plan.Items.Count topic@(plan.Items.Count == 1 ? "" : "s") assessed
+                                            </span>
+                                        </div>
+                                        <ol class="mb-0 small">
+                                            @foreach (var item in plan.Items)
+                                            {
+                                                <li class="mb-1">
+                                                    <span class="badge @PlanActionBadge(item.Action) me-1">@PlanActionLabel(item.Action)</span>
+                                                    <span class="fw-semibold" dir="auto">@item.Topic.Name</span>
+                                                    <span class="badge @ImportanceBadge(item.Topic.Importance) ms-1">@item.Topic.Importance</span>
+                                                    <span class="text-muted ms-1">
+                                                        @if (item.Action == StudyAction.WriteCards)
+                                                        {
+                                                            <span>nothing to study yet</span>
+                                                        }
+                                                        else if (item.Action == StudyAction.Review)
+                                                        {
+                                                            <span>@item.CardsNeedingWork of @item.CardCount card@(item.CardCount == 1 ? "" : "s") need work · @Pct(item.Mastery) mastery</span>
+                                                        }
+                                                        else
+                                                        {
+                                                            <span>@item.CardCount card@(item.CardCount == 1 ? "" : "s") · holds past the deadline</span>
+                                                        }
+                                                    </span>
+                                                </li>
+                                            }
+                                        </ol>
+                                    </td>
+                                </tr>
+                            }
                         }
                     </tbody>
                 </table>
@@ -1007,6 +1053,9 @@ else
     private List<string> _blockedReasons = [];
     private int _unmappedMaterialCount;
 
+    private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
+    private Guid? _expandedPlanId;
+
     private List<TopicCoverage> _perTopicCoverage = [];
     private CoverageReport _coverage = CoverageReport.Empty;
     private List<TopicCoverage> _gaps = [];
@@ -1111,6 +1160,13 @@ else
         (_perTopicCoverage, _coverage) = await CoverageService.GetCoverageAsync(Id);
         _gaps = [.. CoveragePolicy.Gaps(_perTopicCoverage)];
         _unlinkedCardCount = await CoverageService.CountUnlinkedCardsAsync(Id);
+
+        _assignmentPlans = [];
+        foreach (var assignment in _materials.Where(m => m.DueDate is not null))
+        {
+            if (await StudyPlanService.GetForAssignmentAsync(assignment.Id) is { } plan)
+                _assignmentPlans[assignment.Id] = plan;
+        }
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
         _spend = await AiJobService.GetSpendAsync(Id);
@@ -1407,6 +1463,20 @@ else
         TopicChangeKind.Reweight => "text-bg-info",
         TopicChangeKind.Merge => "text-bg-primary",
         _ => "text-bg-secondary",
+    };
+
+    private static string PlanActionBadge(StudyAction action) => action switch
+    {
+        StudyAction.WriteCards => "text-bg-danger",
+        StudyAction.Review => "text-bg-warning",
+        _ => "text-bg-success",
+    };
+
+    private static string PlanActionLabel(StudyAction action) => action switch
+    {
+        StudyAction.WriteCards => "Write cards",
+        StudyAction.Review => "Review",
+        _ => "Ready",
     };
 
     private int CardsFor(Guid topicId) =>
