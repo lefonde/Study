@@ -39,9 +39,14 @@ public class CourseMapService(
         var course = await db.Courses.AsNoTracking().FirstOrDefaultAsync(c => c.Id == job.CourseId, ct)
             ?? throw new InvalidOperationException("The course was deleted before mapping ran.");
 
+        // Submissions are excluded on purpose: a solution records what the student thinks, not
+        // what the course assesses, and letting one into the bundle would let a confident wrong
+        // answer promote a topic the course barely mentions.
         var materials = await db.Materials.AsNoTracking()
             .Include(m => m.Extract)
-            .Where(m => m.CourseId == job.CourseId && m.Status == MaterialStatus.Ingested)
+            .Where(m => m.CourseId == job.CourseId
+                        && m.Status == MaterialStatus.Ingested
+                        && m.Kind != MaterialKind.Submission)
             .ToListAsync(ct);
 
         if (materials.Count == 0)

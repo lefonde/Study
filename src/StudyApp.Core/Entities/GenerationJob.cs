@@ -8,6 +8,12 @@ public enum JobKind
     MapCourse = 2,
     /// <summary>Course-scoped: links cards to the topics they teach. Re-run as cards accumulate.</summary>
     MapCoverage = 3,
+    /// <summary>
+    /// Reviews a submitted solution. MaterialId points at the <i>submission</i>; the assignment
+    /// it answers is reached through <see cref="Material.SubmissionForId"/>, so no second
+    /// material slot is needed here.
+    /// </summary>
+    ReviewSolution = 4,
 }
 
 public enum JobStatus

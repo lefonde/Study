@@ -21,6 +21,7 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
     public DbSet<TopicProposal> TopicProposals => Set<TopicProposal>();
     public DbSet<CardTopic> CardTopics => Set<CardTopic>();
     public DbSet<TopicPrerequisite> TopicPrerequisites => Set<TopicPrerequisite>();
+    public DbSet<SubmissionReview> SubmissionReviews => Set<SubmissionReview>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -40,6 +41,8 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
             .HasQueryFilter(s => !s.Topic!.IsDeleted && !s.Material!.IsDeleted);
         modelBuilder.Entity<CourseMapRevision>().HasQueryFilter(r => !r.IsDeleted);
         modelBuilder.Entity<TopicProposal>().HasQueryFilter(p => !p.IsDeleted);
+        modelBuilder.Entity<SubmissionReview>()
+            .HasQueryFilter(r => !r.IsDeleted && !r.Material!.IsDeleted);
 
         modelBuilder.Entity<Deck>()
             .HasOne(d => d.Course)
@@ -256,6 +259,26 @@ public class StudyDbContext(DbContextOptions<StudyDbContext> options) : DbContex
         // behind something that no longer exists.
         modelBuilder.Entity<TopicPrerequisite>()
             .HasQueryFilter(p => !p.Topic!.IsDeleted && !p.Prerequisite!.IsDeleted);
+
+        // --- Solution reviews ---
+
+        // A submission points at the assignment it answers. SetNull rather than Cascade: deleting
+        // an assignment shouldn't take the student's own work down with it.
+        modelBuilder.Entity<Material>()
+            .HasOne(m => m.SubmissionFor)
+            .WithMany()
+            .HasForeignKey(m => m.SubmissionForId)
+            .OnDelete(DeleteBehavior.SetNull);
+
+        modelBuilder.Entity<SubmissionReview>()
+            .HasOne(r => r.Material)
+            .WithMany()
+            .HasForeignKey(r => r.MaterialId)
+            .OnDelete(DeleteBehavior.Cascade);
+
+        // Owned JSON, like ProposedSource: findings are written once with the review and read
+        // together with it, never queried on their own.
+        modelBuilder.Entity<SubmissionReview>().OwnsMany(r => r.Findings, b => b.ToJson());
 
         // Composite key: the pair IS the fact, so a card can never be linked to one topic twice.
         modelBuilder.Entity<CardTopic>().HasKey(ct => new { ct.CardId, ct.CourseTopicId });

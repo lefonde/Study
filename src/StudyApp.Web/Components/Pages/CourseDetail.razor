@@ -9,6 +9,7 @@
 @inject AiJobService AiJobService
 @inject CourseMapService CourseMapService
 @inject CoverageService CoverageService
+@inject SubmissionReviewService SubmissionReviewService
 @inject StudyPlanService StudyPlanService
 @using StudyApp.Core.Planning
 @inject SuggestionService SuggestionService
@@ -293,8 +294,11 @@ else
                     </div>
                     <div class="col-6 col-md-3">
                         <label class="form-label">Kind</label>
+                        @* Submission is not offered here: a solution is uploaded against the
+                           assignment it answers, from that assignment's row, since it is
+                           meaningless without knowing which questions it answers. *@
                         <select class="form-select" @bind="_uploadKind">
-                            @foreach (var kind in Enum.GetValues<MaterialKind>())
+                            @foreach (var kind in Enum.GetValues<MaterialKind>().Where(k => k != MaterialKind.Submission))
                             {
                                 <option value="@kind">@kind</option>
                             }
@@ -508,10 +512,22 @@ else
                         </tr>
                     </thead>
                     <tbody>
+                        @if (_solutionError is { } solutionProblem)
+                        {
+                            <tr><td colspan="7"><div class="alert alert-danger mb-0">@solutionProblem</div></td></tr>
+                        }
                         @foreach (var m in _materials)
                         {
                             <tr>
-                                <td class="text-break" dir="auto">@m.Title</td>
+                                <td class="text-break" dir="auto">
+                                    @m.Title
+                                    @if (m.SubmissionForId is { } answers)
+                                    {
+                                        <div class="small text-muted">
+                                            ↳ your answer to @(_materials.FirstOrDefault(a => a.Id == answers)?.Title ?? "a deleted assignment")
+                                        </div>
+                                    }
+                                </td>
                                 <td><span class="badge text-bg-secondary">@m.Kind</span></td>
                                 <td class="small text-muted">@(m.UnitId is { } uid ? UnitPath(uid) : "—")</td>
                                 <td class="small text-nowrap">@FormatSize(m.SizeBytes)</td>
@@ -555,10 +571,29 @@ else
                                     }
                                     @if (m.Kind == MaterialKind.HomeAssignment && m.DueDate is not null)
                                     {
+                                        <button class="btn btn-sm btn-outline-info me-1"
+                                                title="Upload your answer and have it reviewed"
+                                                @onclick="() => _uploadingSolutionFor = _uploadingSolutionFor == m.Id ? null : m.Id">
+                                            📤 Solution
+                                        </button>
                                         <button class="btn btn-sm @(m.SubmittedAt is null ? "btn-outline-secondary" : "btn-secondary") me-1"
                                                 title="@(m.SubmittedAt is null ? "Mark handed in — it stops showing as upcoming" : "Reopen — it counts as upcoming again")"
                                                 @onclick="() => ToggleSubmittedAsync(m.Id, m.SubmittedAt is null)">
                                             @(m.SubmittedAt is null ? "✓ Submitted" : "↩ Reopen")
+                                        </button>
+                                    }
+                                    @if (m.Kind == MaterialKind.Submission && AiOptions.IsConfigured && m.Status == MaterialStatus.Ingested)
+                                    {
+                                        <button class="btn btn-sm btn-primary me-1" disabled="@_hasActiveJobs"
+                                                @onclick="() => ReviewSolutionAsync(m.Id)">
+                                            @(_reviews.ContainsKey(m.Id) ? "🧾 Re-review" : "🧾 Review this")
+                                        </button>
+                                    }
+                                    @if (_reviews.ContainsKey(m.Id))
+                                    {
+                                        <button class="btn btn-sm btn-outline-primary me-1"
+                                                @onclick="() => _expandedReviewId = _expandedReviewId == m.Id ? null : m.Id">
+                                            @(_expandedReviewId == m.Id ? "Hide feedback" : "Feedback")
                                         </button>
                                     }
                                     @if (AiOptions.IsConfigured)
@@ -582,6 +617,75 @@ else
                                     <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteMaterialAsync(m.Id)">✕</button>
                                 </td>
                             </tr>
+                            @if (_uploadingSolutionFor == m.Id)
+                            {
+                                <tr>
+                                    <td colspan="7" class="bg-body-tertiary">
+                                        <div class="fw-semibold mb-1">Upload your answer to @m.Title</div>
+                                        <p class="text-muted small mb-2">
+                                            It's read alongside the assignment's own questions and comes back as
+                                            per-question feedback. It is deliberately kept out of the course map
+                                            and the card glossary, so a wrong answer can't teach the app anything.
+                                        </p>
+                                        <InputFile class="form-control" style="max-width: 28rem;"
+                                                   OnChange="e => UploadSolutionAsync(m.Id, e)" disabled="@_uploading" />
+                                        @if (_uploading)
+                                        {
+                                            <div class="small text-muted mt-1">Uploading…</div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                            @if (_expandedReviewId == m.Id && _reviews.TryGetValue(m.Id, out var review))
+                            {
+                                <tr>
+                                    <td colspan="7" class="bg-body-tertiary">
+                                        <div class="fw-semibold mb-1">
+                                            Feedback on @m.Title
+                                            <span class="text-muted small ms-1">
+                                                @review.CountOf(ReviewVerdict.Correct) correct ·
+                                                @review.CountOf(ReviewVerdict.Partly) partly ·
+                                                @review.CountOf(ReviewVerdict.Incorrect) incorrect ·
+                                                @review.CountOf(ReviewVerdict.Missing) missing
+                                            </span>
+                                        </div>
+                                        @* Said plainly, because a per-question verdict list looks a lot like
+                                           marking and it hasn't seen the marking scheme. *@
+                                        <div class="small text-muted fst-italic mb-2">
+                                            Feedback on your work, not a grade — no score is estimated on purpose.
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(review.Summary))
+                                        {
+                                            <div class="small map-md md-content mb-2" dir="auto">@Md(review.Summary)</div>
+                                        }
+                                        <ul class="list-unstyled mb-0 small">
+                                            @foreach (var finding in review.Findings)
+                                            {
+                                                <li class="mb-2">
+                                                    <span class="badge @VerdictBadge(finding.Verdict) me-1">@finding.Verdict</span>
+                                                    <span class="fw-semibold" dir="auto">@finding.Question</span>
+                                                    @if (finding.CourseTopicId is { } topicId)
+                                                    {
+                                                        <span class="badge text-bg-light border ms-1 md-content" dir="auto">
+                                                            @MdInline(TopicName(topicId))
+                                                        </span>
+                                                    }
+                                                    <div class="map-md md-content" dir="auto">@Md(finding.Comment)</div>
+                                                </li>
+                                            }
+                                        </ul>
+                                        @* The whole reason findings carry a topic: a mistake becomes something
+                                           to study rather than something to feel bad about. *@
+                                        @if (AiOptions.IsConfigured && review.WeakTopicIds.Any())
+                                        {
+                                            <button class="btn btn-sm btn-primary mt-1" disabled="@_hasActiveJobs"
+                                                    @onclick="() => GenerateForWeakTopicsAsync(review)">
+                                                ✨ Generate cards for the @review.WeakTopicIds.Count() topic@(review.WeakTopicIds.Count() == 1 ? "" : "s") you slipped on
+                                            </button>
+                                        }
+                                    </td>
+                                </tr>
+                            }
                             @if (_expandedPlanId == m.Id && _assignmentPlans.TryGetValue(m.Id, out var plan))
                             {
                                 <tr>
@@ -1283,6 +1387,11 @@ else
     private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
     private Guid? _expandedPlanId;
 
+    private Dictionary<Guid, SubmissionReview> _reviews = [];
+    private Guid? _expandedReviewId;
+    private Guid? _uploadingSolutionFor;
+    private string? _solutionError;
+
     private List<TopicCoverage> _perTopicCoverage = [];
     private CoverageReport _coverage = CoverageReport.Empty;
     private List<TopicCoverage> _gaps = [];
@@ -1464,6 +1573,13 @@ else
         {
             if (await StudyPlanService.GetForAssignmentAsync(assignment.Id) is { } plan)
                 _assignmentPlans[assignment.Id] = plan;
+        }
+
+        _reviews = [];
+        foreach (var submission in _materials.Where(m => m.Kind == MaterialKind.Submission))
+        {
+            if (await SubmissionReviewService.GetForSubmissionAsync(submission.Id) is { } review)
+                _reviews[submission.Id] = review;
         }
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
@@ -1806,6 +1922,81 @@ else
             _uploading = false;
         }
     }
+
+    // --- Solutions and their reviews ---
+
+    /// <summary>
+    /// Uploads an answer against one assignment, then queues its ingestion straight away — a
+    /// solution is only useful once it can be read, and making the user press Ingest as a separate
+    /// step just leaves it sitting there.
+    /// </summary>
+    private async Task UploadSolutionAsync(Guid assignmentId, InputFileChangeEventArgs e)
+    {
+        _solutionError = null;
+        _uploading = true;
+        try
+        {
+            var file = e.File;
+            await using var stream = file.OpenReadStream(MaxFileSizeBytes);
+            var material = await MaterialService.UploadAsync(
+                Id, file.Name, file.ContentType, stream,
+                MaterialKind.Submission, null, null, submissionForId: assignmentId);
+
+            if (AiOptions.IsConfigured)
+                await AiJobService.QueueAsync(material.Id, JobKind.Ingest);
+
+            _uploadingSolutionFor = null;
+        }
+        catch (Exception ex)
+        {
+            _solutionError = ex.Message;
+        }
+        finally
+        {
+            _uploading = false;
+        }
+        await ReloadAsync();
+    }
+
+    private async Task ReviewSolutionAsync(Guid submissionId)
+    {
+        _solutionError = null;
+        try
+        {
+            await AiJobService.QueueAsync(submissionId, JobKind.ReviewSolution);
+        }
+        catch (Exception ex)
+        {
+            _solutionError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    /// <summary>
+    /// Closes the loop: the topics a review flagged become the targets of a generation run, so a
+    /// mistake turns into cards rather than a note to self.
+    /// </summary>
+    private async Task GenerateForWeakTopicsAsync(SubmissionReview review)
+    {
+        _jobError = null;
+        try
+        {
+            await AiJobService.QueueTopicGenerationAsync(Id, [.. review.WeakTopicIds]);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    private static string VerdictBadge(ReviewVerdict verdict) => verdict switch
+    {
+        ReviewVerdict.Correct => "text-bg-success",
+        ReviewVerdict.Partly => "text-bg-warning",
+        ReviewVerdict.Incorrect => "text-bg-danger",
+        _ => "text-bg-secondary",
+    };
 
     // --- Course map ---
 

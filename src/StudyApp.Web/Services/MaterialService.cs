@@ -39,16 +39,19 @@ public class MaterialService(
 
     public async Task<Material> UploadAsync(
         Guid courseId, string fileName, string mimeType, Stream content,
-        MaterialKind kind, Guid? unitId, DateTime? dueDate)
+        MaterialKind kind, Guid? unitId, DateTime? dueDate, Guid? submissionForId = null)
     {
         var material = new Material
         {
             CourseId = courseId,
-            Kind = kind,
+            // A file uploaded against an assignment is a submission by construction — the caller
+            // shouldn't have to remember to say so as well.
+            Kind = submissionForId is null ? kind : MaterialKind.Submission,
             Title = Path.GetFileNameWithoutExtension(fileName),
             MimeType = mimeType,
             UnitId = unitId,
             DueDate = kind == MaterialKind.HomeAssignment ? dueDate : null,
+            SubmissionForId = submissionForId,
         };
 
         material.FilePath = await fileStore.SaveAsync(courseId, material.Id, fileName, content);

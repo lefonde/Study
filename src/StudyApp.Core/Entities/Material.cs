@@ -10,6 +10,14 @@ public enum MaterialKind
     Exam = 5,
     Screenshot = 6,
     Other = 7,
+    /// <summary>
+    /// The student's own answer to an assignment, uploaded for review.
+    ///
+    /// Deliberately excluded from the course map and from the generation glossary: a submission
+    /// records what the student thinks, not what the course teaches, and letting it into either
+    /// would make their own mistakes authoritative.
+    /// </summary>
+    Submission = 8,
 }
 
 public enum MaterialStatus
@@ -48,6 +56,15 @@ public class Material : ITimestamped
     /// passed on a date, which is more use than merely knowing it is no longer pending.
     /// </summary>
     public DateTime? SubmittedAt { get; set; }
+
+    /// <summary>
+    /// For a <see cref="MaterialKind.Submission"/>, the assignment it answers. Null otherwise.
+    ///
+    /// This is also how a review job finds its second input: the job points at the submission and
+    /// walks back through here for the questions, so no second material slot is needed on the job.
+    /// </summary>
+    public Guid? SubmissionForId { get; set; }
+    public Material? SubmissionFor { get; set; }
 
     public MaterialStatus Status { get; set; } = MaterialStatus.Uploaded;
 

@@ -59,6 +59,16 @@ public record MapResult(
     [property: JsonPropertyName("summary")] string Summary,
     [property: JsonPropertyName("proposals")] List<MappedProposal> Proposals);
 
+public record ReviewedAnswer(
+    [property: JsonPropertyName("question")] string Question,
+    [property: JsonPropertyName("verdict")] string Verdict,
+    [property: JsonPropertyName("comment")] string Comment,
+    [property: JsonPropertyName("topicRef")] string? TopicRef);
+
+public record SolutionReviewResult(
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("findings")] List<ReviewedAnswer> Findings);
+
 public record MappedCardLink(
     [property: JsonPropertyName("cardRef")] string CardRef,
     [property: JsonPropertyName("topicRefs")] List<string> TopicRefs);
@@ -284,6 +294,68 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
             }
           },
           "required": ["summary", "proposals"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string ReviewSystemPrompt = """
+        You review a student's submitted answers against the assignment they answer.
+
+        You are giving feedback, not marking. Do not invent a score, a grade, a percentage or a
+        mark out of anything: you have not seen the marking scheme, and a number you made up
+        would be taken more seriously than it deserves. Judge each answer on whether it is right.
+
+        One finding per question the assignment asks, in the assignment's own numbering
+        ("Q3(b)", "שאלה 2"). Include questions that were not answered at all.
+
+        verdict:
+        - correct    — the answer is right, and the working supports it.
+        - partly     — the approach is right but something in the working or the conclusion is
+                       wrong, or a required part is missing.
+        - incorrect  — the answer is wrong, or the method does not apply here.
+        - missing    — the question was not attempted.
+
+        comment: what is actually wrong and why, naming the specific step. "The safety check
+        stops after finding one safe sequence, but the question asks whether the state is safe
+        for every ordering" is useful. "Could be improved" is not. For a correct answer, say in
+        one line what it got right, and stay silent rather than manufacturing a criticism.
+
+        Judge only what was asked. A different valid method is not an error, and neither is
+        terser working than you would have written. If the submission is unreadable or clearly
+        not an answer to this assignment, say so in the summary and return no findings.
+
+        topicRef: the course topic the question turns on, using its ref (T1, T2…). Only use refs
+        that appear in the input, and leave it empty if none of them fits — a mistake filed under
+        the wrong topic sends the student to study the wrong thing.
+
+        summary: a short paragraph — what went well, and the one or two things most worth working
+        on before the next assignment.
+
+        Write in the language of the assignment. Mathematics goes in LaTeX between plain $
+        delimiters, and never with right-to-left text inside the delimiters.
+        """;
+
+    private static readonly string ReviewSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string", "description": "Short paragraph: what went well, what to work on." },
+            "findings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "question": { "type": "string", "description": "The assignment's own label for the question." },
+                  "verdict": { "type": "string", "enum": ["correct", "partly", "incorrect", "missing"] },
+                  "comment": { "type": "string" },
+                  "topicRef": { "type": "string", "description": "Course topic ref (T1). Empty if none fits." }
+                },
+                "required": ["question", "verdict", "comment", "topicRef"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["summary", "findings"],
           "additionalProperties": false
         }
         """;
@@ -556,6 +628,48 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
     }
 
     /// <summary>
+    /// Reviews a submitted solution against the assignment it answers.
+    ///
+    /// Reads extracts, like every stage after ingestion — the assignment's questions and the
+    /// student's answers, both transcribed verbatim, which is why neither may be summarised on
+    /// the way in. The topic list is passed so a mistake can be attributed to something the map
+    /// already knows about, rather than producing prose with nothing to act on.
+    /// </summary>
+    public async Task<AiResult<SolutionReviewResult>> ReviewSolutionAsync(
+        string assignmentText,
+        string solutionText,
+        string topicList,
+        CancellationToken ct = default)
+    {
+        var prompt = new StringBuilder();
+        prompt.AppendLine("## The assignment");
+        prompt.AppendLine(assignmentText);
+        prompt.AppendLine();
+        prompt.AppendLine("## The student's submitted answers");
+        prompt.AppendLine(solutionText);
+        prompt.AppendLine();
+        prompt.AppendLine("## The course's topics");
+        prompt.AppendLine(topicList);
+
+        var parameters = new MessageCreateParams
+        {
+            Model = options.Model,
+            MaxTokens = 16000,
+            System = new List<TextBlockParam>
+            {
+                new() { Text = ReviewSystemPrompt, CacheControl = new CacheControlEphemeral() },
+            },
+            OutputConfig = new OutputConfig
+            {
+                Format = new JsonOutputFormat { Schema = ParseSchema(ReviewSchema) },
+            },
+            Messages = [new() { Role = Role.User, Content = prompt.ToString() }],
+        };
+
+        return await StreamJsonAsync<SolutionReviewResult>(parameters, ct);
+    }
+
+    /// <summary>
     /// Stage 2c: works out which topics each card covers.
     ///
     /// Separate from <see cref="MapCourseAsync"/> rather than folded into it: this needs
@@ -730,6 +844,9 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         MaterialKind.Exam or MaterialKind.HomeAssignment => ExtractionMode.Verbatim,
         MaterialKind.HandwrittenNotes or MaterialKind.Screenshot => ExtractionMode.Verbatim,
         MaterialKind.Syllabus => ExtractionMode.Verbatim,
+        // The student's own work, and reviewing it means reading exactly what they wrote — a
+        // paraphrase would smooth over the very slip the review is meant to catch.
+        MaterialKind.Submission => ExtractionMode.Verbatim,
         _ => ExtractionMode.StructuredNotes,
     };
 

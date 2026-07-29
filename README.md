@@ -213,9 +213,56 @@ Upload a past exam later and **re-map**: the emphasis legitimately shifts, and y
 shift before it lands. Topics keep their identity across a re-map, so cards stay attached.
 **📌 Pin** a topic to fix its importance yourself — re-mapping will never override it.
 
-Give an assignment a **due date** and its **📋 Plan** says what stands between you and it:
-topics with no cards first, then what needs review, then what already holds past the deadline.
+## The learning path
+
+Mapping also records what each topic **builds on**, which turns the list into an order you can
+follow. The Map tab's **Path** view lays topics out in stages — a topic sits one stage after the
+deepest thing it needs — and draws the dependencies between them. **List** is the same topics in
+one column with their settings, and the better view on a phone.
+
+Prerequisites are editable by hand from the List view: a wrong edge would otherwise cost an API
+call to fix, and one bad link distorts everything below it. Loops are refused by name.
+
+**Assignments appear on the path**, placed after the deepest stage they assess. Click one and
+everything unrelated dims, so which subjects feed which deadline is something you see rather than
+work out.
+
+## Before an assignment
+
+Give an assignment a **due date** and its **📋 Plan** says what stands between you and it. It has
+two halves:
+
+- **Assessed** — what the assignment's own material tests.
+- **Foundations** — what those rest on, pulled in through the prerequisite graph. A foundation
+  with no cards is flagged as *blocking*, because it stops the topics above it being learnable.
+
 That one is pure arithmetic over the map — no API call, no cost.
+
+**🎯 Study this assignment** starts a review session over just those cards. It doesn't use the
+usual "due today" filter: preparing for Thursday means clearing what won't still be solid *on*
+Thursday, which is a larger and more useful set. The 20-new-cards-per-session cap still applies —
+the night before an assignment is exactly when cramming 60 new cards works worst — so the
+completion screen tells you how many are waiting instead.
+
+**✓ Submitted** marks an assignment handed in; it stops appearing as upcoming everywhere.
+
+## Getting a solution reviewed
+
+Press **📤 Solution** on an assignment and upload your answers. The file is ingested and then read
+alongside the assignment's own questions, coming back as per-question feedback: a verdict
+(correct / partly / incorrect / missing), what specifically is wrong, and which course topic each
+question turns on.
+
+There is **no score or predicted grade**, deliberately. Nothing here has seen the marking scheme,
+and a number invented by a model would carry an authority it hasn't earned — the per-question
+verdicts say the same thing honestly.
+
+The payoff is the last column: because every finding names a topic, **✨ Generate cards for the
+topics you slipped on** turns a mistake into cards rather than a note to self.
+
+Your solutions are kept out of the course map and out of the card glossary. They record what you
+think, not what the course teaches, and a confident wrong answer must not be able to promote a
+topic or define a term.
 
 ## Roadmap (deliberately deferred)
 
@@ -227,6 +274,11 @@ That one is pure arithmetic over the map — no API call, no cost.
   of what it covers (importance driven by what the course *assesses*, with per-course weights),
   revised under review as new material lands; coverage reported beside mastery; card generation
   aimed at the gaps; and a study plan against assignment due dates
+- ✅ v0.6: **the learning path** — prerequisites between topics, derived by the same map run and
+  editable by hand; the map drawn as stages with the dependencies between them and assignments
+  placed on it; plans that reach past what an assignment literally tests into the foundations it
+  rests on; assignment-scoped review sessions and a submitted flag; and solution upload with
+  per-question feedback that names the topic each mistake turns on
 - next: **practice exams** generated from what the course actually assesses — the reason
   assessment materials keep their full text and `TopicMention.Assessed` is recorded
 - Scheduler: SM-2 today behind an `IScheduler` seam; FSRS is a drop-in swap later — though FSRS

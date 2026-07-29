@@ -116,6 +116,13 @@ public class JobRunner(
                 case JobKind.MapCoverage:
                     await scope.ServiceProvider.GetRequiredService<CoverageService>().RunAsync(job, ct);
                     break;
+                case JobKind.ReviewSolution:
+                    await scope.ServiceProvider.GetRequiredService<SubmissionReviewService>().RunAsync(job, ct);
+                    break;
+                default:
+                    // No silent success: an unhandled kind used to complete having done nothing,
+                    // which looks identical to a run that worked.
+                    throw new InvalidOperationException($"No handler is registered for {job.Kind} jobs.");
             }
         }
         catch (Exception ex)

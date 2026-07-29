@@ -31,6 +31,10 @@ public class AssessmentWeight
         new() { Kind = MaterialKind.HandwrittenNotes, Weight = 30 },
         new() { Kind = MaterialKind.Screenshot, Weight = 10 },
         new() { Kind = MaterialKind.Other, Weight = 10 },
+        // Zero, and it should stay zero: your own answers are evidence of what you think, not of
+        // what the course assesses. Weighting them would let a confident wrong answer promote a
+        // topic the course barely mentions.
+        new() { Kind = MaterialKind.Submission, Weight = 0 },
     ];
 
     /// <summary>

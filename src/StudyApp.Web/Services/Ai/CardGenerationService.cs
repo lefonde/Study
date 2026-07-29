@@ -45,9 +45,13 @@ public class CardGenerationService(
         //
         // AsNoTracking is required, not optional: Terms is an owned collection, and EF refuses
         // to track owned entities projected without their owner.
+        // Submissions are excluded: the glossary is meant to be the course's shared vocabulary,
+        // and a term the student defined in their own answer may simply be wrong. Feeding that
+        // back into generation would turn one mistake into a deck full of them.
         var termLists = await db.MaterialExtracts
             .AsNoTracking()
-            .Where(e => e.Material!.CourseId == material.CourseId)
+            .Where(e => e.Material!.CourseId == material.CourseId
+                        && e.Material!.Kind != MaterialKind.Submission)
             .Select(e => e.Terms)
             .ToListAsync(ct);
 

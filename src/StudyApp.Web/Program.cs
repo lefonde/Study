@@ -180,6 +180,7 @@ builder.Services.AddScoped<IngestionService>();
 builder.Services.AddScoped<CardGenerationService>();
 builder.Services.AddScoped<CourseMapService>();
 builder.Services.AddScoped<CoverageService>();
+builder.Services.AddScoped<SubmissionReviewService>();
 builder.Services.AddScoped<AiJobService>();
 builder.Services.AddScoped<SuggestionService>();
 builder.Services.AddHostedService<JobRunner>();
