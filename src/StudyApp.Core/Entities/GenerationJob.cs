@@ -14,6 +14,15 @@ public enum JobKind
     /// material slot is needed here.
     /// </summary>
     ReviewSolution = 4,
+    /// <summary>
+    /// Course-scoped: works out what each existing topic builds on.
+    ///
+    /// Separate from <see cref="MapCourse"/> because the two want opposite instructions. Mapping
+    /// is a revision that must resist churn — faced with no new evidence it correctly proposes
+    /// nothing — whereas this one exists precisely to fill gaps in a map that is already settled,
+    /// which is the only way a course mapped before dependencies existed ever gets a path.
+    /// </summary>
+    MapPrerequisites = 5,
 }
 
 public enum JobStatus

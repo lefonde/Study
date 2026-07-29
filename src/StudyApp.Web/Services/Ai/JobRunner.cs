@@ -119,6 +119,9 @@ public class JobRunner(
                 case JobKind.ReviewSolution:
                     await scope.ServiceProvider.GetRequiredService<SubmissionReviewService>().RunAsync(job, ct);
                     break;
+                case JobKind.MapPrerequisites:
+                    await scope.ServiceProvider.GetRequiredService<CourseMapService>().RunPrerequisitesAsync(job, ct);
+                    break;
                 default:
                     // No silent success: an unhandled kind used to complete having done nothing,
                     // which looks identical to a run that worked.

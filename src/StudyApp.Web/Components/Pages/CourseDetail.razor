@@ -720,6 +720,13 @@ else
                     <button class="btn btn-outline-primary" disabled="@_hasActiveJobs" @onclick="MapCourseAsync">
                         @(_topics.Count == 0 ? "✨ Map this course" : "✨ Re-map with new material")
                     </button>
+                    @if (_topics.Count > 1)
+                    {
+                        <button class="btn btn-outline-secondary" disabled="@_hasActiveJobs" @onclick="MapPrerequisitesAsync"
+                                title="Work out which topics have to be learned before which — this is what draws the path">
+                            🧭 Work out the learning path
+                        </button>
+                    }
                     @if (_topics.Count > 0 && _unlinkedCardCount > 0)
                     {
                         <button class="btn btn-outline-secondary" disabled="@_hasActiveJobs" @onclick="LinkCardsAsync">
@@ -998,13 +1005,42 @@ else
 
             @if (!_mapAsList)
             {
+                @* Deliberately does not say "re-map": mapping is a revision that proposes nothing
+                   when no new material has arrived, so it will not retrofit a path onto a map
+                   that already exists. The dedicated run is the only thing that will. *@
                 @if (!_progression.HasAnyEdges)
                 {
-                    <div class="alert alert-secondary py-2 small">
-                        No dependencies recorded yet, so there's no order to show — every topic reads
-                        as a starting point. Re-map the course to have them worked out, or set them
-                        by hand from the <button class="btn btn-link p-0 align-baseline"
-                                                 @onclick="() => _mapAsList = true">List</button> view.
+                    <div class="alert alert-warning d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
+                        <span class="small">
+                            <strong>No dependencies recorded yet</strong>, so there's no order to show —
+                            every topic reads as a starting point. Working out the learning path is a
+                            separate, cheaper run than mapping; re-mapping alone won't fill this in.
+                            You can also set them by hand from the
+                            <button class="btn btn-link p-0 align-baseline"
+                                    @onclick="() => _mapAsList = true">List</button> view.
+                        </span>
+                        @if (AiOptions.IsConfigured)
+                        {
+                            <button class="btn btn-sm btn-primary" disabled="@_hasActiveJobs"
+                                    @onclick="MapPrerequisitesAsync">
+                                🧭 Work out the learning path
+                            </button>
+                        }
+                    </div>
+                }
+                else if (TopicsWithoutPrerequisites is var unlinked && unlinked > 1 && AiOptions.IsConfigured)
+                {
+                    @* Partly-linked is the normal state after a re-map: it wires up what it added
+                       and leaves the rest alone. *@
+                    <div class="alert alert-secondary d-flex align-items-center justify-content-between flex-wrap gap-2 py-2">
+                        <span class="small">
+                            @unlinked topics have nothing recorded before them. Some of those really
+                            are starting points; the rest are gaps in the path.
+                        </span>
+                        <button class="btn btn-sm btn-outline-primary" disabled="@_hasActiveJobs"
+                                @onclick="MapPrerequisitesAsync">
+                            🧭 Work out the learning path
+                        </button>
                     </div>
                 }
 
@@ -1628,7 +1664,9 @@ else
     {
         JobKind.MapCourse => "Course mapping",
         JobKind.MapCoverage => "Card linking",
+        JobKind.MapPrerequisites => "Working out the learning path",
         JobKind.GenerateCards => "Card generation",
+        JobKind.ReviewSolution => "Solution review",
         _ => "Ingestion",
     };
 
@@ -2034,6 +2072,8 @@ else
 
     // --- the progression map ---
 
+    private int TopicsWithoutPrerequisites => _topics.Count(t => t.Prerequisites.Count == 0);
+
     private IEnumerable<Material> UpcomingAssignments =>
         _materials.Where(m => m.DueDate is not null && m.SubmittedAt is null)
                   .OrderBy(m => m.DueDate);
@@ -2135,6 +2175,25 @@ else
         try
         {
             await AiJobService.QueueCourseJobAsync(Id, JobKind.MapCoverage);
+        }
+        catch (Exception ex)
+        {
+            _jobError = ex.Message;
+        }
+        await ReloadAsync();
+    }
+
+    /// <summary>
+    /// A separate run from mapping, because mapping cannot do this: it is a revision that
+    /// resists churn, so a course mapped before dependencies existed stays flat no matter how
+    /// often it is re-mapped.
+    /// </summary>
+    private async Task MapPrerequisitesAsync()
+    {
+        _jobError = null;
+        try
+        {
+            await AiJobService.QueueCourseJobAsync(Id, JobKind.MapPrerequisites);
         }
         catch (Exception ex)
         {

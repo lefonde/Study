@@ -59,6 +59,15 @@ public record MapResult(
     [property: JsonPropertyName("summary")] string Summary,
     [property: JsonPropertyName("proposals")] List<MappedProposal> Proposals);
 
+public record MappedPrerequisites(
+    [property: JsonPropertyName("topicRef")] string TopicRef,
+    [property: JsonPropertyName("prerequisiteRefs")] List<string> PrerequisiteRefs,
+    [property: JsonPropertyName("reason")] string Reason);
+
+public record PrerequisiteMapResult(
+    [property: JsonPropertyName("summary")] string Summary,
+    [property: JsonPropertyName("links")] List<MappedPrerequisites> Links);
+
 public record ReviewedAnswer(
     [property: JsonPropertyName("question")] string Question,
     [property: JsonPropertyName("verdict")] string Verdict,
@@ -294,6 +303,66 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
             }
           },
           "required": ["summary", "proposals"],
+          "additionalProperties": false
+        }
+        """;
+
+    private const string PrerequisiteSystemPrompt = """
+        You work out the order in which a course's topics can be learned.
+
+        For each topic, say which of the other topics a student must already understand for it to
+        make sense. The result is a learning path, so it has to mean dependency, not association.
+
+        - Include a link only if the topic is genuinely unteachable first: "you cannot follow the
+          Banker's algorithm without safe states". Not "these are related", not "both are about
+          deadlock", and not "this came earlier in the material" — order of presentation is not
+          dependency.
+        - Prefer the nearest prerequisite. If C needs B and B needs A, list only B for C; A
+          follows through the chain and listing it as well adds noise, not information.
+        - Most topics have one or two. The topics a course opens with have none at all, and a
+          general topic is usually the prerequisite of its specific cases rather than the reverse
+          — "Round-robin scheduling" needs "CPU scheduling", not the other way round.
+        - Never point a topic at itself, and never create a loop: if A requires B then B must not
+          require A, directly or through any chain.
+
+        Some topics already have dependencies recorded, shown as [requires: …]. Those are settled
+        — repeat them in that topic's list, and add whatever is missing beside them. Never
+        contradict one.
+
+        Return an entry only for topics whose list you are changing. A topic that is genuinely
+        foundational, or whose dependencies are already complete, should not appear at all;
+        an empty links array is a valid answer for a course that is already fully connected.
+
+        reason: one short line saying what the dependency actually is — "the safety check is
+        defined in terms of safe states" — not "they are related".
+
+        Use the topics' own names and language. Only use refs that appear in the input.
+        """;
+
+    private static readonly string PrerequisiteSchema = """
+        {
+          "type": "object",
+          "properties": {
+            "summary": { "type": "string", "description": "One line: what structure this run found." },
+            "links": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "topicRef": { "type": "string", "description": "The dependent topic's ref (T1)." },
+                  "prerequisiteRefs": {
+                    "type": "array",
+                    "description": "Refs of the topics that must be understood first.",
+                    "items": { "type": "string" }
+                  },
+                  "reason": { "type": "string" }
+                },
+                "required": ["topicRef", "prerequisiteRefs", "reason"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["summary", "links"],
           "additionalProperties": false
         }
         """;
@@ -625,6 +694,47 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         };
 
         return await StreamJsonAsync<MapResult>(parameters, ct);
+    }
+
+    /// <summary>
+    /// Works out what each topic in an existing map builds on.
+    ///
+    /// Cheap by construction: it sends topic names and summaries plus the course's section
+    /// titles, never the material itself. Judging whether one concept is needed to follow
+    /// another is a question about the concepts, and the outline is enough to ground it in how
+    /// this particular course presents them.
+    /// </summary>
+    public async Task<AiResult<PrerequisiteMapResult>> MapPrerequisitesAsync(
+        string courseName,
+        string topicList,
+        string courseOutline,
+        CancellationToken ct = default)
+    {
+        var prompt = new StringBuilder();
+        prompt.AppendLine($"# Course: {courseName}");
+        prompt.AppendLine();
+        prompt.AppendLine("## Topics");
+        prompt.AppendLine(topicList);
+        prompt.AppendLine();
+        prompt.AppendLine("## How the course's material is organised");
+        prompt.AppendLine(courseOutline);
+
+        var parameters = new MessageCreateParams
+        {
+            Model = options.Model,
+            MaxTokens = 16000,
+            System = new List<TextBlockParam>
+            {
+                new() { Text = PrerequisiteSystemPrompt, CacheControl = new CacheControlEphemeral() },
+            },
+            OutputConfig = new OutputConfig
+            {
+                Format = new JsonOutputFormat { Schema = ParseSchema(PrerequisiteSchema) },
+            },
+            Messages = [new() { Role = Role.User, Content = prompt.ToString() }],
+        };
+
+        return await StreamJsonAsync<PrerequisiteMapResult>(parameters, ct);
     }
 
     /// <summary>

@@ -95,6 +95,164 @@ public class CourseMapService(
         await db.SaveChangesAsync(ct);
     }
 
+    /// <summary>
+    /// Works out what the course's existing topics build on.
+    ///
+    /// This exists because <see cref="RunAsync"/> cannot do it. Mapping is a revision prompt that
+    /// deliberately resists churn, so on a settled map it proposes nothing — which is right for
+    /// what it does, and leaves a course mapped before dependencies existed permanently flat.
+    /// Confirmed in practice: two re-maps of a mapped course left seven topics unlinked,
+    /// including cases as obvious as round-robin scheduling needing CPU scheduling.
+    ///
+    /// Additions only. A dependency the user set by hand is never argued with, matching how pins
+    /// and dismissals already outrank a re-run.
+    /// </summary>
+    public async Task RunPrerequisitesAsync(GenerationJob job, CancellationToken ct)
+    {
+        await using var db = await factory.CreateDbContextAsync(ct);
+
+        var course = await db.Courses.AsNoTracking().FirstOrDefaultAsync(c => c.Id == job.CourseId, ct)
+            ?? throw new InvalidOperationException("The course was deleted before this ran.");
+
+        var topics = await db.CourseTopics.AsNoTracking()
+            .Include(t => t.Prerequisites)
+            .Where(t => t.CourseId == job.CourseId && !t.IsDismissed)
+            .OrderBy(t => t.Name)
+            .ToListAsync(ct);
+
+        if (topics.Count < 2)
+            throw new InvalidOperationException(
+                "There aren't enough topics to order yet — map the course first.");
+
+        var topicRefs = topics.Select((t, i) => (Topic: t, Ref: $"T{i + 1}")).ToList();
+
+        var outline = await BuildCourseOutlineAsync(db, job.CourseId, ct);
+
+        var result = await claude.MapPrerequisitesAsync(
+            course.Name, BuildCurrentTopics(topicRefs), outline, ct);
+
+        var revision = BuildPrerequisiteRevision(job, result.Value, topicRefs);
+
+        db.CourseMapRevisions.Add(revision);
+        job.InputTokens = result.InputTokens;
+        job.OutputTokens = result.OutputTokens;
+        job.Message = revision.Proposals.Count == 0
+            ? "No new dependencies found — the learning path already covers this map."
+            : $"{revision.Proposals.Count} topic(s) with new dependencies, waiting for review.";
+
+        db.GenerationJobs.Attach(job);
+        db.Entry(job).State = EntityState.Modified;
+        await db.SaveChangesAsync(ct);
+    }
+
+    /// <summary>
+    /// Section titles per material — enough to ground ordering in how this course actually
+    /// presents things, without paying to send the material itself.
+    /// </summary>
+    private static async Task<string> BuildCourseOutlineAsync(
+        StudyDbContext db, Guid courseId, CancellationToken ct)
+    {
+        var materials = await db.Materials.AsNoTracking()
+            .Include(m => m.Extract)
+            .Where(m => m.CourseId == courseId
+                        && m.Status == MaterialStatus.Ingested
+                        && m.Kind != MaterialKind.Submission)
+            .OrderBy(m => m.Kind)
+            .ToListAsync(ct);
+
+        if (materials.Count == 0)
+            return "(no ingested material — judge the ordering from the topics alone)";
+
+        var sb = new StringBuilder();
+        foreach (var material in materials)
+        {
+            sb.AppendLine($"### {material.Title} ({material.Kind})");
+            var titles = (material.Extract?.Sections ?? [])
+                .Select(s => s.Title)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Take(MaxSectionTitlesPerMaterial);
+            foreach (var title in titles)
+                sb.AppendLine($"- {title}");
+            sb.AppendLine();
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Turns the model's links into <see cref="TopicChangeKind.Relink"/> proposals, keeping only
+    /// edges that would actually land.
+    ///
+    /// Edges that already exist are dropped so a second run on a finished map proposes nothing,
+    /// and cycles are filtered here rather than left to the apply pass — a proposal whose only
+    /// edge gets silently skipped later would be a change that appears to do nothing.
+    /// </summary>
+    private CourseMapRevision BuildPrerequisiteRevision(
+        GenerationJob job,
+        PrerequisiteMapResult result,
+        List<(CourseTopic Topic, string Ref)> topicRefs)
+    {
+        var topicByRef = topicRefs.ToDictionary(x => x.Ref, x => x.Topic, StringComparer.OrdinalIgnoreCase);
+
+        var revision = new CourseMapRevision
+        {
+            CourseId = job.CourseId,
+            JobId = job.Id,
+            Status = RevisionStatus.Pending,
+            Summary = ClaudeService.NormalizeMarkdown(result.Summary).Trim(),
+        };
+
+        var edges = topicRefs
+            .SelectMany(x => x.Topic.Prerequisites)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToList();
+
+        foreach (var link in result.Links ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(link.TopicRef)
+                || !topicByRef.TryGetValue(link.TopicRef.Trim(), out var topic))
+                continue;
+
+            var wanted = new List<ProposedPrerequisite>();
+            foreach (var reference in link.PrerequisiteRefs ?? [])
+            {
+                if (string.IsNullOrWhiteSpace(reference)
+                    || !topicByRef.TryGetValue(reference.Trim(), out var prerequisite))
+                    continue;
+
+                if (prerequisite.Id == topic.Id)
+                    continue;
+                if (edges.Contains(new TopicEdge(topic.Id, prerequisite.Id)))
+                    continue;
+                if (PrerequisiteGraph.WouldCycle(edges, topic.Id, prerequisite.Id))
+                    continue;
+
+                wanted.Add(new ProposedPrerequisite { TopicId = prerequisite.Id });
+                // Accumulated as we go, so two proposed edges in one run cannot close a loop
+                // between them either.
+                edges.Add(new TopicEdge(topic.Id, prerequisite.Id));
+            }
+
+            if (wanted.Count == 0)
+                continue;
+
+            revision.Proposals.Add(new TopicProposal
+            {
+                Kind = TopicChangeKind.Relink,
+                CourseTopicId = topic.Id,
+                // Echoed unchanged: applying a Relink touches dependencies only, and the review
+                // panel shows these so the proposal reads as the topic it belongs to.
+                ProposedName = topic.Name,
+                ProposedSummary = topic.Summary,
+                ProposedImportance = topic.Importance,
+                Reason = ClaudeService.NormalizeMarkdown(link.Reason).Trim(),
+                Status = ProposalStatus.Pending,
+                Prerequisites = wanted,
+            });
+        }
+
+        return revision;
+    }
+
     private static string BuildWeightProfile(List<AssessmentWeight> weights) =>
         string.Join("\n", weights
             .OrderByDescending(w => w.Weight)
@@ -445,8 +603,18 @@ public class CourseMapService(
         }
 
         proposal.Status = ProposalStatus.Accepted;
-        await ResolveEdgesAsync(db, proposal.RevisionId, topics, ct);
+
+        // Saved *before* the edges are resolved, and this ordering is load-bearing.
+        // ResolveEdgesAsync queries for the revision's accepted proposals, and that filter runs
+        // in SQL — so until this status reaches the database, the one proposal the pass cannot
+        // see is the one being accepted right now. Its dependencies would then land only if some
+        // later accept happened to re-run the pass, which is exactly the silent, order-dependent
+        // failure this whole two-phase design exists to avoid.
         await db.SaveChangesAsync(ct);
+
+        if (await ResolveEdgesAsync(db, proposal.RevisionId, topics, ct))
+            await db.SaveChangesAsync(ct);
+
         await CloseRevisionIfSettledAsync(db, proposal.RevisionId, ct);
         return null;
     }
@@ -461,7 +629,7 @@ public class CourseMapService(
     /// silently drop that edge. Re-running after each accept picks up whatever has since become
     /// resolvable, and adds nothing twice.
     /// </summary>
-    private static async Task ResolveEdgesAsync(
+    private static async Task<bool> ResolveEdgesAsync(
         StudyDbContext db, Guid revisionId, List<CourseTopic> topics, CancellationToken ct)
     {
         var accepted = await db.TopicProposals
@@ -469,7 +637,9 @@ public class CourseMapService(
             .ToListAsync(ct);
 
         if (accepted.TrueForAll(p => p.Prerequisites.Count == 0))
-            return;
+            return false;
+
+        var added = false;
 
         var live = topics.Where(t => !t.IsDeleted).ToList();
         var byId = live.Select(t => t.Id).ToHashSet();
@@ -506,9 +676,11 @@ public class CourseMapService(
                         : (Guid?)null;
 
                 if (target is { } prerequisiteId)
-                    AddEdgeIfSafe(db, edges, dependentId, prerequisiteId);
+                    added |= AddEdgeIfSafe(db, edges, dependentId, prerequisiteId);
             }
         }
+
+        return added;
     }
 
     /// <summary>

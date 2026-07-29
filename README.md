@@ -215,10 +215,18 @@ shift before it lands. Topics keep their identity across a re-map, so cards stay
 
 ## The learning path
 
-Mapping also records what each topic **builds on**, which turns the list into an order you can
-follow. The Map tab's **Path** view lays topics out in stages — a topic sits one stage after the
-deepest thing it needs — and draws the dependencies between them. **List** is the same topics in
-one column with their settings, and the better view on a phone.
+Topics also record what they **build on**, which turns the list into an order you can follow. The
+Map tab's **Path** view lays them out in stages — a topic sits one stage after the deepest thing
+it needs — and draws the dependencies between them. **List** is the same topics in one column
+with their settings, and the better view on a phone.
+
+**🧭 Work out the learning path** is a separate run from mapping, and on an existing course it is
+the one you need. Mapping is a *revision*: shown a settled map and no new evidence, it correctly
+proposes nothing, so re-mapping will never retrofit a path onto topics that already exist — it
+only wires up what it happens to be adding. The learning-path run does nothing but fill those
+gaps. It sends topic names and section titles rather than the material itself, so it is cheap
+(~$0.02 for a 17-topic course), it only ever *adds* dependencies, and running it again once the
+path is complete finds nothing and costs almost nothing.
 
 Prerequisites are editable by hand from the List view: a wrong edge would otherwise cost an API
 call to fix, and one bad link distorts everything below it. Loops are refused by name.
