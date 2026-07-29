@@ -511,11 +511,22 @@ else
                         @foreach (var m in _materials)
                         {
                             <tr>
-                                <td class="text-break">@m.Title</td>
+                                <td class="text-break" dir="auto">@m.Title</td>
                                 <td><span class="badge text-bg-secondary">@m.Kind</span></td>
                                 <td class="small text-muted">@(m.UnitId is { } uid ? UnitPath(uid) : "—")</td>
                                 <td class="small text-nowrap">@FormatSize(m.SizeBytes)</td>
-                                <td class="small text-nowrap">@(m.DueDate is { } d ? d.ToString("yyyy-MM-dd") : "—")</td>
+                                <td class="small text-nowrap">
+                                    @if (m.SubmittedAt is { } handedIn)
+                                    {
+                                        <span class="badge text-bg-success" title="Handed in — no longer counted as upcoming">
+                                            ✓ @handedIn.ToLocalTime().ToString("d MMM")
+                                        </span>
+                                    }
+                                    else
+                                    {
+                                        @(m.DueDate is { } d ? d.ToString("yyyy-MM-dd") : "—")
+                                    }
+                                </td>
                                 <td class="text-nowrap">
                                     @switch (m.Status)
                                     {
@@ -537,6 +548,17 @@ else
                                         <button class="btn btn-sm btn-outline-primary me-1"
                                                 @onclick="() => _expandedPlanId = _expandedPlanId == m.Id ? null : m.Id">
                                             @(_expandedPlanId == m.Id ? "Hide plan" : "📋 Plan")
+                                        </button>
+                                        <a class="btn btn-sm btn-outline-success me-1"
+                                           title="Review only the cards this assignment needs"
+                                           href="review/assignment/@m.Id">🎯 Study</a>
+                                    }
+                                    @if (m.Kind == MaterialKind.HomeAssignment && m.DueDate is not null)
+                                    {
+                                        <button class="btn btn-sm @(m.SubmittedAt is null ? "btn-outline-secondary" : "btn-secondary") me-1"
+                                                title="@(m.SubmittedAt is null ? "Mark handed in — it stops showing as upcoming" : "Reopen — it counts as upcoming again")"
+                                                @onclick="() => ToggleSubmittedAsync(m.Id, m.SubmittedAt is null)">
+                                            @(m.SubmittedAt is null ? "✓ Submitted" : "↩ Reopen")
                                         </button>
                                     }
                                     @if (AiOptions.IsConfigured)
@@ -1810,6 +1832,12 @@ else
     private async Task DeleteMaterialAsync(Guid materialId)
     {
         await MaterialService.DeleteAsync(materialId);
+        await ReloadAsync();
+    }
+
+    private async Task ToggleSubmittedAsync(Guid materialId, bool submitted)
+    {
+        await MaterialService.SetSubmittedAsync(materialId, submitted);
         await ReloadAsync();
     }
 

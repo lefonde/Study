@@ -102,8 +102,12 @@ public class StudyPlanPolicy(ProgressPolicy progress, TimeProvider timeProvider)
     /// A card needs work before the target if it hasn't graduated yet, or if its current schedule
     /// brings it due on or before the day. A card due after the target is one the scheduler has
     /// already placed beyond the deadline — it will still be fresh then without being touched.
+    ///
+    /// Public because it is also the right filter for an assignment-scoped review session:
+    /// studying for Thursday means studying what won't hold until Thursday, which is a strictly
+    /// larger set than what happens to be due today.
     /// </summary>
-    private static bool NeedsWorkBefore(Card card, DateTime targetDateUtc) =>
+    public static bool NeedsWorkBefore(Card card, DateTime targetDateUtc) =>
         card.State is CardState.New or CardState.Learning
         || card.Due is not { } due
         || due <= targetDateUtc;

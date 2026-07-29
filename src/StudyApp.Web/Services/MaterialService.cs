@@ -4,7 +4,10 @@ using StudyApp.Web.Data;
 
 namespace StudyApp.Web.Services;
 
-public class MaterialService(IDbContextFactory<StudyDbContext> factory, MaterialFileStore fileStore)
+public class MaterialService(
+    IDbContextFactory<StudyDbContext> factory,
+    MaterialFileStore fileStore,
+    TimeProvider timeProvider)
 {
     public async Task<List<Material>> GetAllAsync(Guid courseId)
     {
@@ -77,11 +80,25 @@ public class MaterialService(IDbContextFactory<StudyDbContext> factory, Material
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Marks an assignment handed in, or reopens it. Submitted assignments drop out of
+    /// "upcoming" everywhere — without that, an overdue one sorts first forever and quietly
+    /// occupies a slot in a list that only shows five.
+    /// </summary>
+    public async Task SetSubmittedAsync(Guid materialId, bool submitted)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        var material = await db.Materials.FirstAsync(m => m.Id == materialId);
+        material.SubmittedAt = submitted ? timeProvider.GetUtcNow().UtcDateTime : null;
+        await db.SaveChangesAsync();
+    }
+
     public async Task<List<Material>> GetUpcomingAssignmentsAsync(Guid courseId, int take = 5)
     {
         await using var db = await factory.CreateDbContextAsync();
         return await db.Materials.AsNoTracking()
-            .Where(m => m.CourseId == courseId && m.Kind == MaterialKind.HomeAssignment && m.DueDate != null)
+            .Where(m => m.CourseId == courseId && m.Kind == MaterialKind.HomeAssignment
+                        && m.DueDate != null && m.SubmittedAt == null)
             .OrderBy(m => m.DueDate)
             .Take(take)
             .ToListAsync();
@@ -92,7 +109,8 @@ public class MaterialService(IDbContextFactory<StudyDbContext> factory, Material
     {
         await using var db = await factory.CreateDbContextAsync();
         return await db.Materials.AsNoTracking()
-            .Where(m => m.Kind == MaterialKind.HomeAssignment && m.DueDate != null)
+            .Where(m => m.Kind == MaterialKind.HomeAssignment
+                        && m.DueDate != null && m.SubmittedAt == null)
             .Include(m => m.Course)
             .OrderBy(m => m.DueDate)
             .Take(take)

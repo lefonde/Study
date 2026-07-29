@@ -40,6 +40,15 @@ public class Material : ITimestamped
     public long SizeBytes { get; set; }
     /// <summary>Set only for HomeAssignment materials.</summary>
     public DateTime? DueDate { get; set; }
+
+    /// <summary>
+    /// When this assignment was handed in. Null means still outstanding.
+    ///
+    /// A timestamp rather than a flag: the map shows a submitted assignment as a milestone you
+    /// passed on a date, which is more use than merely knowing it is no longer pending.
+    /// </summary>
+    public DateTime? SubmittedAt { get; set; }
+
     public MaterialStatus Status { get; set; } = MaterialStatus.Uploaded;
 
     /// <summary>The AI-ready form of this file, once ingested. Null until then.</summary>

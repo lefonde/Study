@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using StudyApp.Core.Entities;
+using StudyApp.Core.Planning;
 using StudyApp.Core.Scheduling;
 using StudyApp.Web.Data;
 
@@ -32,6 +33,18 @@ public record HomeSummary(List<CourseDueSummary> Courses)
     public bool HasAnythingToStudy => TotalDue + TotalNew > 0;
 }
 
+/// <summary>
+/// A review session narrowed to one assignment. <paramref name="NewHeldBack"/> is what the
+/// per-session new-card cap kept out, so the page can say so rather than silently truncating.
+/// </summary>
+public record AssignmentSession(
+    List<Card> Queue,
+    string Title,
+    Guid CourseId,
+    DateTime DueDateUtc,
+    int CardsNeedingWork,
+    int NewHeldBack);
+
 public class ReviewService(
     IDbContextFactory<StudyDbContext> factory,
     IScheduler scheduler,
@@ -54,6 +67,58 @@ public class ReviewService(
             .ToListAsync();
 
         return SessionQueueBuilder.Build(candidates, cutoff);
+    }
+
+    /// <summary>
+    /// Builds a session over just the cards that teach what one assignment assesses. Returns null
+    /// when the material isn't a dated assignment, so the page can explain rather than show an
+    /// empty queue.
+    ///
+    /// Unlike a normal session this does <b>not</b> filter on "due today". Preparing for a
+    /// deadline means clearing everything that won't still be durable on the day, which is what
+    /// <see cref="StudyPlanPolicy.NeedsWorkBefore"/> decides — the same predicate the written plan
+    /// counts with, so the two can never disagree about how much work is left.
+    /// </summary>
+    public async Task<AssignmentSession?> BuildAssignmentSessionAsync(Guid materialId)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+
+        var material = await db.Materials.AsNoTracking().FirstOrDefaultAsync(m => m.Id == materialId);
+        if (material?.DueDate is not { } due)
+            return null;
+
+        var target = DateTime.SpecifyKind(due.Date, DateTimeKind.Utc);
+
+        var topicIds = await db.TopicSources.AsNoTracking()
+            .Where(s => s.MaterialId == materialId && s.Mention == TopicMention.Assessed)
+            .Select(s => s.CourseTopicId)
+            .Distinct()
+            .ToListAsync();
+
+        var cardIds = topicIds.Count == 0
+            ? []
+            : await db.CardTopics.AsNoTracking()
+                .Where(ct => topicIds.Contains(ct.CourseTopicId))
+                .Select(ct => ct.CardId)
+                .Distinct()
+                .ToListAsync();
+
+        var cards = cardIds.Count == 0
+            ? []
+            : await db.Cards.AsNoTracking().Where(c => cardIds.Contains(c.Id)).ToListAsync();
+
+        var needingWork = cards.Where(c => StudyPlanPolicy.NeedsWorkBefore(c, target)).ToList();
+
+        // The builder re-applies its own due filter, so hand it a cutoff past the deadline —
+        // needingWork has already made the real decision about what belongs in this session.
+        // What the builder is still wanted for is the shuffle and the new-card cap.
+        var queue = SessionQueueBuilder.Build(needingWork, target.AddDays(1));
+
+        var newHeldBack = needingWork.Count(c => c.State == CardState.New)
+                          - queue.Count(c => c.State == CardState.New);
+
+        return new AssignmentSession(
+            queue, material.Title, material.CourseId, target, needingWork.Count, newHeldBack);
     }
 
     /// <summary>Grades a card: applies the scheduler, logs the review, persists. Returns undo info.</summary>

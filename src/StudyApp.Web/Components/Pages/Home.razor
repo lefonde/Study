@@ -1,12 +1,17 @@
 @page "/"
+@implements IAsyncDisposable
 @inject ReviewService ReviewService
 @inject MaterialService MaterialService
 @inject ProgressService ProgressService
 @inject StudyPlanService StudyPlanService
+@inject IJSRuntime JS
 @using StudyApp.Core.Planning
 
 <PageTitle>StudyApp — Home</PageTitle>
 
+@* Wrapper carries the @ref so OnAfterRenderAsync can hand KaTeX one element — the assignment
+   rows name topics, and topic names are markdown with LaTeX. *@
+<div @ref="_pageRef">
 <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-4">
     <h1 class="mb-0">Today</h1>
     <a href="how-it-works" class="small">How review &amp; mastery work</a>
@@ -56,13 +61,26 @@ else
         <div class="list-group mb-4">
             @foreach (var a in _upcomingAssignments)
             {
-                <a href="courses/@a.CourseId" class="list-group-item list-group-item-action">
+                @* A div, not an anchor: the row carries its own buttons now, and a button inside
+                   an anchor is invalid HTML — the click would land on both. *@
+                <div class="list-group-item">
                     <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
                         <span>
-                            <span class="fw-semibold">@a.Title</span>
+                            <a href="courses/@a.CourseId" class="fw-semibold text-decoration-none" dir="auto">@a.Title</a>
                             <span class="text-muted small">— @a.Course?.Name</span>
                         </span>
-                        <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
+                        <span class="d-flex align-items-center gap-2 flex-wrap">
+                            <span class="badge @DueBadgeClass(a.DueDate!.Value)">@DueLabel(a.DueDate!.Value)</span>
+                            @if (_assignmentPlans.ContainsKey(a.Id))
+                            {
+                                <a class="btn btn-sm btn-outline-success"
+                                   title="Review only the cards this assignment needs"
+                                   href="review/assignment/@a.Id">🎯 Study</a>
+                            }
+                            <button class="btn btn-sm btn-outline-secondary"
+                                    title="Mark handed in — it stops showing here"
+                                    @onclick="() => MarkSubmittedAsync(a.Id)">✓ Submitted</button>
+                        </span>
                     </div>
                     @if (_assignmentPlans.TryGetValue(a.Id, out var plan))
                     {
@@ -87,8 +105,16 @@ else
                             }
                             @if (plan.Gaps.Any())
                             {
+                                @* Rendered per name rather than string.Join'd: topic names are
+                                   markdown with LaTeX, and joining them first would print the
+                                   delimiters verbatim. *@
                                 <span class="text-muted">
-                                    Start with @string.Join(", ", plan.Gaps.Take(3).Select(g => g.Topic.Name))@(plan.TopicsNeedingCards > 3 ? "…" : "")
+                                    Start with
+                                    @foreach (var (gap, i) in plan.Gaps.Take(3).Select((g, i) => (g, i)))
+                                    {
+                                        @(i > 0 ? ", " : "")<span class="md-content" dir="auto">@((MarkupString)MarkdownRenderer.ToInlineHtml(gap.Topic.Name))</span>
+                                    }
+                                    @(plan.TopicsNeedingCards > 3 ? "…" : "")
                                 </span>
                             }
                         </div>
@@ -101,7 +127,7 @@ else
                             durable by then (@forecast.WillLapseBeforeTarget card@(forecast.WillLapseBeforeTarget == 1 ? "" : "s") still need review before).
                         </div>
                     }
-                </a>
+                </div>
             }
         </div>
     }
@@ -153,6 +179,7 @@ else
         }
     </div>
 }
+</div>
 
 @code {
     private HomeSummary? _summary;
@@ -161,8 +188,52 @@ else
     private Dictionary<Guid, ProgressForecast> _assignmentForecasts = [];
     private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
 
-    protected override async Task OnInitializedAsync()
+    private ElementReference _pageRef;
+    private IJSObjectReference? _mathJs;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (_summary is null)
+            return;
+
+        try
+        {
+            _mathJs ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            await _mathJs.InvokeVoidAsync("renderMath", _pageRef);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+        {
+            // A navigation can advance past this element before the call resolves, leaving the
+            // reference stale. Harmless here; letting it bubble would kill the whole circuit.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+            // The circuit is already gone; there is nothing left to dispose on the other side.
+        }
+    }
+
+    private async Task MarkSubmittedAsync(Guid materialId)
+    {
+        await MaterialService.SetSubmittedAsync(materialId, true);
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _assignmentPlans.Clear();
+        _assignmentForecasts.Clear();
+
         _summary = await ReviewService.GetHomeSummaryAsync();
         _upcomingAssignments = await MaterialService.GetUpcomingAssignmentsAsync();
 
