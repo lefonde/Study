@@ -152,8 +152,17 @@ terminal. Settings shows **Connected** with the last four characters when it's l
 Two stages, deliberately separated:
 
 1. **Ingest** a material once (Materials tab → *Ingest*). Claude reads the PDF or scan with
-   vision and stores a `MaterialExtract`: the document as markdown with LaTeX preserved,
-   original language intact, figures described, split into sections tagged by page.
+   vision and stores a `MaterialExtract`: markdown with LaTeX preserved, original language
+   intact, figures described, split into sections tagged by page.
+
+   How much is reproduced depends on the material's **kind**. Your own work — exams,
+   assignments, handwritten notes, the syllabus — is transcribed word for word, because a
+   question means exactly what it says. Published reference material — book chapters, lecture
+   notes — becomes comprehensive study notes instead: every definition, theorem, formula and
+   worked-example method is kept in full and formal statements are quoted, but the surrounding
+   prose is rewritten rather than copied. That is what the later stages actually need, and
+   attempting to transcribe a whole course book verbatim will simply be refused by the API's
+   content filter.
 2. **Generate cards** from that extract (→ *Generate cards*). This never re-reads the
    original file, which is why the first pass is the expensive one and every run after it is
    cheap and fast.

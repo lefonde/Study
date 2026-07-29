@@ -25,7 +25,8 @@ public class IngestionService(
             throw new InvalidOperationException("The uploaded file is missing from storage.");
 
         var bytes = await File.ReadAllBytesAsync(path, ct);
-        var result = await claude.ExtractAsync(bytes, material.MimeType, material.Kind.ToString(), ct);
+        var mode = ClaudeService.ModeFor(material.Kind);
+        var result = await claude.ExtractAsync(bytes, material.MimeType, material.Kind, ct);
 
         // Re-ingesting replaces the previous extract outright rather than accumulating
         // versions — one material has exactly one current best reading of it.
@@ -59,7 +60,10 @@ public class IngestionService(
 
         job.InputTokens = result.InputTokens;
         job.OutputTokens = result.OutputTokens;
-        job.Message = $"Extracted {result.Value.Sections.Count} sections across " +
+        // The mode is recorded here rather than on the extract: it's a fact about this run, and
+        // changing the material's kind later shouldn't rewrite the history of what was done.
+        var modeLabel = mode == ClaudeService.ExtractionMode.Verbatim ? "transcribed" : "noted";
+        job.Message = $"Extracted ({modeLabel}) {result.Value.Sections.Count} sections across " +
                       $"{result.Value.PageCount} page(s); {result.Value.Topics.Count} topics, " +
                       $"{result.Value.Terms.Count} terms.";
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Anthropic;
 using Anthropic.Models.Messages;
+using StudyApp.Core.Entities;
 
 namespace StudyApp.Web.Services.Ai;
 
@@ -74,15 +75,12 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
     // message the user can act on rather than letting a huge upload fail deep in the request.
     private const long MaxSourceBytes = 20 * 1024 * 1024;
 
-    private const string ExtractionSystemPrompt = """
-        You convert a page of course material into a faithful, reusable text representation.
-
-        This extraction runs ONCE and then permanently stands in for the original file for all
-        later work — no downstream step ever sees the source document again. Anything you drop
-        here is lost for good, so transcribe rather than summarise.
-
-        Rules:
-        - Transcribe the document completely. Do not summarise, abridge, or skip content.
+    /// <summary>
+    /// Rules every extraction obeys regardless of mode. These are about fidelity of *facts* —
+    /// notation, language, location — which matter identically whether the output is a
+    /// transcription or a set of notes.
+    /// </summary>
+    private const string ExtractionSharedRules = """
         - Write ALL mathematics as LaTeX: $...$ inline, $$...$$ for display. Never describe a
           formula in prose ("lambda times S" is wrong; "$\lambda \cdot \bar{S}$" is right).
         - Write the delimiters as plain $ characters. Never escape them as \$.
@@ -93,7 +91,6 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
           extraction is reused for every later step the damage would be permanent.
         - Preserve the document's original language exactly. Never translate. A Hebrew source
           stays Hebrew.
-        - Transcribe handwriting as faithfully as you can. Mark a genuinely illegible word [?].
         - Figures and diagrams cannot be reproduced as text: describe each in square brackets
           in place, e.g. [Figure: process state diagram — New → Ready → Running → Terminated].
         - Record the page number every section came from. Citations depend on it being right.
@@ -101,6 +98,59 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         - topics: the distinct concepts this document covers, in the source language.
         - terms: domain vocabulary with the definition this source uses, so later work speaks
           the course's own language rather than generic textbook phrasing.
+        """;
+
+    /// <summary>
+    /// For material the student owns and is assessed on, where the exact wording IS the object
+    /// of study: a question's precise phrasing determines what it asks, and their own notes are
+    /// theirs to reproduce.
+    /// </summary>
+    private const string VerbatimExtractionPrompt = $"""
+        You convert a page of course material into a faithful, reusable text representation.
+
+        This extraction runs ONCE and then permanently stands in for the original file for all
+        later work — no downstream step ever sees the source document again. Anything you drop
+        here is lost for good, so transcribe rather than summarise.
+
+        Rules:
+        - Transcribe the document completely. Do not summarise, abridge, or skip content.
+        - Transcribe handwriting as faithfully as you can. Mark a genuinely illegible word [?].
+        - Keep exam and assignment questions word for word, including mark allocations: their
+          exact phrasing is what determines what is being asked.
+        {ExtractionSharedRules}
+        """;
+
+    /// <summary>
+    /// For published reference material — textbooks, course books, distributed lecture notes.
+    ///
+    /// Produces comprehensive study notes rather than a transcription. This is a better fit for
+    /// what the pipeline downstream actually consumes: mapping reads section titles, topics and
+    /// terms, and card generation needs definitions, results and methods — none of which require
+    /// the source's prose reproduced at length. It also keeps a full course book's worth of
+    /// published text from being copied wholesale into local storage.
+    /// </summary>
+    private const string StructuredExtractionPrompt = $"""
+        You turn a page of published course material into comprehensive study notes.
+
+        This runs ONCE and everything downstream — topic mapping, flashcard writing — sees only
+        your notes, never the source. So the SUBSTANCE must survive in full even though the
+        prose does not: a student working from your notes alone should be able to learn the
+        material and answer exam questions on it.
+
+        Rules:
+        - Capture every concept, definition, rule, theorem or property statement, formula,
+          algorithm, and worked-example method. These are the facts of the subject and none of
+          them may be dropped, softened, or merged.
+        - Write them in your own words, structured as notes. Do not reproduce the source's
+          sentences and paragraphs at length — this is published material.
+        - Length follows the content: a dense page of definitions produces dense notes. Never
+          compress by leaving something out; compress by dropping narration, motivation, asides
+          and repetition.
+        - Keep worked examples as method — the steps, the reasoning at each step, and the result
+          — rather than as a copy of the exercise text.
+        - Quote only where the exact words carry the meaning: a formal definition, a theorem
+          statement, a term being introduced.
+        {ExtractionSharedRules}
         """;
 
     private const string GenerationSystemPrompt = """
@@ -318,26 +368,42 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
             : throw new InvalidOperationException(
                 "No Anthropic API key configured. Set StudyApp__Anthropic__ApiKey.");
 
-    /// <summary>Stage 1: read the original file with vision. Run once per material.</summary>
+    /// <summary>
+    /// Stage 1: read the original file with vision. Run once per material.
+    ///
+    /// The mode depends on the material's kind — see <see cref="ModeFor"/>.
+    /// </summary>
     public async Task<AiResult<ExtractionResult>> ExtractAsync(
-        byte[] fileBytes, string mimeType, string materialKind, CancellationToken ct = default)
+        byte[] fileBytes, string mimeType, MaterialKind materialKind, CancellationToken ct = default)
     {
         if (fileBytes.LongLength > MaxSourceBytes)
             throw new InvalidOperationException(
                 $"File is {fileBytes.LongLength / 1024 / 1024} MB; the limit for one ingestion pass is " +
                 $"{MaxSourceBytes / 1024 / 1024} MB. Split it into chapters and upload separately.");
 
+        var mode = ModeFor(materialKind);
         var source = BuildSourceBlock(fileBytes, mimeType);
         var instruction = new TextBlockParam
         {
-            Text = $"This is course material of kind: {materialKind}. Extract it in full, following every rule.",
+            Text = mode == ExtractionMode.Verbatim
+                ? $"This is course material of kind: {materialKind}. Transcribe it in full, following every rule."
+                : $"This is published course material of kind: {materialKind}. Write complete study "
+                  + "notes from it, following every rule.",
         };
 
         var parameters = new MessageCreateParams
         {
             Model = options.Model,
             MaxTokens = 64000,
-            System = new List<TextBlockParam> { new() { Text = ExtractionSystemPrompt } },
+            System = new List<TextBlockParam>
+            {
+                new()
+                {
+                    Text = mode == ExtractionMode.Verbatim
+                        ? VerbatimExtractionPrompt
+                        : StructuredExtractionPrompt,
+                },
+            },
             OutputConfig = new OutputConfig
             {
                 Format = new JsonOutputFormat { Schema = ParseSchema(ExtractionSchema) },
@@ -611,6 +677,35 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
     }
 
     private const int MaxTransientRetries = 2;
+
+    public enum ExtractionMode
+    {
+        /// <summary>Word-for-word. The student's own material, and assessments whose wording is the point.</summary>
+        Verbatim,
+        /// <summary>Comprehensive study notes. Published reference material.</summary>
+        StructuredNotes,
+    }
+
+    /// <summary>
+    /// Which extraction mode a kind of material gets.
+    ///
+    /// The split is ownership and purpose, not importance. Exams, assignments, the student's own
+    /// notes and a syllabus are theirs and short, and for assessments the exact phrasing is the
+    /// object of study — a question means what it says. Textbooks and distributed lecture notes
+    /// are published works whose *content* is what's needed downstream, not their prose: mapping
+    /// reads topics and terms, and card generation needs definitions, results and methods.
+    ///
+    /// Structured notes is also the safe default for <see cref="MaterialKind.Other"/>, since an
+    /// unclassified upload is more likely to be something published than something the student
+    /// wrote.
+    /// </summary>
+    public static ExtractionMode ModeFor(MaterialKind kind) => kind switch
+    {
+        MaterialKind.Exam or MaterialKind.HomeAssignment => ExtractionMode.Verbatim,
+        MaterialKind.HandwrittenNotes or MaterialKind.Screenshot => ExtractionMode.Verbatim,
+        MaterialKind.Syllabus => ExtractionMode.Verbatim,
+        _ => ExtractionMode.StructuredNotes,
+    };
 
     /// <summary>
     /// A server-side block on the model's <i>output</i>, delivered as an error event part-way
