@@ -537,24 +537,54 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
     /// </summary>
     private async Task<AiResult<T>> StreamJsonAsync<T>(MessageCreateParams parameters, CancellationToken ct)
     {
-        var client = CreateClient();
         var json = new StringBuilder();
         long inputTokens = 0, outputTokens = 0;
 
-        await foreach (var streamEvent in client.Messages.CreateStreaming(parameters).WithCancellation(ct))
+        for (var attempt = 1; ; attempt++)
         {
-            if (streamEvent.TryPickContentBlockDelta(out var delta) &&
-                delta.Delta.TryPickText(out var text))
+            json.Clear();
+            inputTokens = outputTokens = 0;
+
+            try
             {
-                json.Append(text.Text);
+                var client = CreateClient();
+                await foreach (var streamEvent in client.Messages.CreateStreaming(parameters).WithCancellation(ct))
+                {
+                    if (streamEvent.TryPickContentBlockDelta(out var delta) &&
+                        delta.Delta.TryPickText(out var text))
+                    {
+                        json.Append(text.Text);
+                    }
+                    else if (streamEvent.TryPickStart(out var start))
+                    {
+                        inputTokens = start.Message.Usage.InputTokens;
+                    }
+                    else if (streamEvent.TryPickDelta(out var messageDelta) && messageDelta.Usage is { } usage)
+                    {
+                        outputTokens = usage.OutputTokens;
+                    }
+                }
+                break;
             }
-            else if (streamEvent.TryPickStart(out var start))
+            catch (Exception ex) when (IsContentFiltered(ex))
             {
-                inputTokens = start.Message.Usage.InputTokens;
+                // Deliberately not retried: the block is a deterministic function of the request,
+                // so a second attempt buys the same refusal and charges for it again.
+                logger.LogWarning(ex, "Response blocked by the content filter");
+                throw new InvalidOperationException(
+                    "Anthropic's content filter blocked the model's response. Retrying won't help — " +
+                    "the same request is blocked the same way. Extraction asks for a complete " +
+                    "verbatim transcription, which is the usual trigger on copyrighted text; a " +
+                    "shorter section, or a document you're free to reproduce, should go through.", ex);
             }
-            else if (streamEvent.TryPickDelta(out var messageDelta) && messageDelta.Usage is { } usage)
+            catch (Exception ex) when (attempt <= MaxTransientRetries && IsTransient(ex))
             {
-                outputTokens = usage.OutputTokens;
+                // A long ingestion is exactly when an overloaded upstream is most likely to be
+                // hit, and losing a multi-minute vision pass to a blip is worth one retry.
+                var delay = TimeSpan.FromSeconds(2 * attempt);
+                logger.LogWarning(ex,
+                    "Transient stream failure on attempt {Attempt}; retrying in {Delay}s", attempt, delay.TotalSeconds);
+                await Task.Delay(delay, ct);
             }
         }
 
@@ -578,5 +608,34 @@ public class ClaudeService(AiOptions options, ILogger<ClaudeService> logger)
         return value is null
             ? throw new InvalidOperationException("The model returned no usable content.")
             : new AiResult<T>(value, inputTokens, outputTokens);
+    }
+
+    private const int MaxTransientRetries = 2;
+
+    /// <summary>
+    /// A server-side block on the model's <i>output</i>, delivered as an error event part-way
+    /// through the stream rather than as a failed request — so it surfaces here as an exception
+    /// carrying the raw SSE payload, which is no use to anyone in the jobs list.
+    /// </summary>
+    private static bool IsContentFiltered(Exception ex) =>
+        Flatten(ex).Any(m =>
+            m.Contains("content filtering", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("content_filter", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>Worth one more try: upstream capacity and connection failures, not refusals.</summary>
+    private static bool IsTransient(Exception ex) =>
+        ex is HttpRequestException or IOException or TaskCanceledException
+        || Flatten(ex).Any(m =>
+            m.Contains("overloaded", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("rate_limit", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("\"type\":\"api_error\"", StringComparison.OrdinalIgnoreCase)
+            || m.Contains("529", StringComparison.Ordinal)
+            || m.Contains("503", StringComparison.Ordinal));
+
+    /// <summary>Messages from the whole exception chain — the SDK often wraps the real detail.</summary>
+    private static IEnumerable<string> Flatten(Exception? ex)
+    {
+        for (; ex is not null; ex = ex.InnerException)
+            yield return ex.Message;
     }
 }
