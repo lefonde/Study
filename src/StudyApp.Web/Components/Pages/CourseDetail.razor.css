@@ -20,6 +20,17 @@
     margin: 0.3rem 0;
 }
 
+/* Same deal on the map: topic summaries and importance reasons are rendered markdown, so their
+   HTML is a MarkupString with no scope attribute. These sit inside dense list rows, where a
+   paragraph's default bottom margin reads as a gap between unrelated topics. */
+.map-md ::deep p:last-child {
+    margin-bottom: 0;
+}
+
+.map-md ::deep .katex-display {
+    margin: 0.3rem 0;
+}
+
 /* The map → link → fill → study sequence. Mapping is step one of four, and finishing it
    looks like nothing happened unless the remaining steps are visible. */
 .map-steps {

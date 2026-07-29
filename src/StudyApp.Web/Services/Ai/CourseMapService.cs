@@ -232,7 +232,9 @@ public class CourseMapService(
                 ProposedName = ClaudeService.NormalizeMarkdown(proposed.Name).Trim(),
                 ProposedSummary = ClaudeService.NormalizeMarkdown(proposed.Summary).Trim(),
                 ProposedImportance = ParseImportance(proposed.Importance),
-                Reason = proposed.Reason?.Trim() ?? "",
+                // Normalised like the name and summary: a reason cites formulas as often as it
+                // cites page numbers, and it is rendered as markdown on the map.
+                Reason = ClaudeService.NormalizeMarkdown(proposed.Reason).Trim(),
                 MergeIntoTopicId = mergeInto,
                 Status = ProposalStatus.Pending,
                 Sources = (proposed.Sources ?? [])

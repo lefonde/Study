@@ -276,6 +276,9 @@ else
     }
     else if (_activeTab == "materials")
     {
+        @* Wrapper exists so OnAfterRenderAsync has one element to hand KaTeX — an expanded
+           assignment plan renders topic names, and those carry LaTeX. *@
+        <div @ref="_materialsRef">
         <div class="card mb-3">
             <div class="card-header">Upload material</div>
             <div class="card-body">
@@ -573,7 +576,7 @@ else
                                             {
                                                 <li class="mb-1">
                                                     <span class="badge @PlanActionBadge(item.Action) me-1">@PlanActionLabel(item.Action)</span>
-                                                    <span class="fw-semibold" dir="auto">@item.Topic.Name</span>
+                                                    <span class="fw-semibold md-content" dir="auto">@MdInline(item.Topic.Name)</span>
                                                     <span class="badge @ImportanceBadge(item.Topic.Importance) ms-1">@item.Topic.Importance</span>
                                                     <span class="text-muted ms-1">
                                                         @if (item.Action == StudyAction.WriteCards)
@@ -600,9 +603,13 @@ else
                 </table>
             </div>
         }
+        </div>
     }
     else if (_activeTab == "map")
     {
+        @* Wrapper exists so OnAfterRenderAsync has one element to hand KaTeX — topic names,
+           summaries and reasons are markdown with LaTeX, same as a card. *@
+        <div @ref="_mapRef">
         <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
             <div>
                 <div class="fw-semibold">What this course covers</div>
@@ -672,7 +679,7 @@ else
                         <strong>@pending.Count proposed change@(pending.Count == 1 ? "" : "s")</strong>
                         @if (!string.IsNullOrWhiteSpace(revision.Summary))
                         {
-                            <span class="text-muted small ms-1">— @revision.Summary</span>
+                            <span class="text-muted small ms-1 md-content" dir="auto">— @MdInline(revision.Summary)</span>
                         }
                     </span>
                     <span class="d-flex gap-2">
@@ -696,7 +703,7 @@ else
                                 <div class="flex-grow-1" style="min-width: 14rem;">
                                     <span class="badge @ChangeBadge(proposal.Kind) me-1"
                                           title="@ChangeHint(proposal.Kind)">@proposal.Kind</span>
-                                    <span class="fw-semibold" dir="auto">@proposal.ProposedName</span>
+                                    <span class="fw-semibold md-content" dir="auto">@MdInline(proposal.ProposedName)</span>
                                     <span class="badge @ImportanceBadge(proposal.ProposedImportance) ms-1">
                                         @proposal.ProposedImportance
                                     </span>
@@ -708,11 +715,11 @@ else
                                     }
                                     @if (!string.IsNullOrWhiteSpace(proposal.ProposedSummary))
                                     {
-                                        <div class="small text-muted" dir="auto">@proposal.ProposedSummary</div>
+                                        <div class="small text-muted map-md md-content" dir="auto">@Md(proposal.ProposedSummary)</div>
                                     }
                                     @if (!string.IsNullOrWhiteSpace(proposal.Reason))
                                     {
-                                        <div class="small fst-italic" dir="auto">@proposal.Reason</div>
+                                        <div class="small fst-italic map-md md-content" dir="auto">@Md(proposal.Reason)</div>
                                     }
                                     <div class="small text-muted">@ChangeHint(proposal.Kind)</div>
                                 </div>
@@ -738,7 +745,7 @@ else
                 <ul class="mb-0 small mt-1">
                     @foreach (var reason in _blockedReasons.Take(5))
                     {
-                        <li>@reason</li>
+                        <li dir="auto">@reason</li>
                     }
                 </ul>
             </div>
@@ -860,7 +867,7 @@ else
                         <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
                             <div class="flex-grow-1" style="min-width: 14rem;">
                                 <span class="badge @ImportanceBadge(topic.Importance) me-1">@topic.Importance</span>
-                                <span class="fw-semibold" dir="auto">@topic.Name</span>
+                                <span class="fw-semibold md-content" dir="auto">@MdInline(topic.Name)</span>
                                 @if (CardsFor(topic.Id) is var cardCount)
                                 {
                                     @if (cardCount > 0)
@@ -885,18 +892,18 @@ else
                                 }
                                 @if (!string.IsNullOrWhiteSpace(topic.Summary))
                                 {
-                                    <div class="small text-muted" dir="auto">@topic.Summary</div>
+                                    <div class="small text-muted map-md md-content" dir="auto">@Md(topic.Summary)</div>
                                 }
                                 @if (!string.IsNullOrWhiteSpace(topic.ImportanceReason))
                                 {
-                                    <div class="small fst-italic" dir="auto">@topic.ImportanceReason</div>
+                                    <div class="small fst-italic map-md md-content" dir="auto">@Md(topic.ImportanceReason)</div>
                                 }
                                 @if (topic.Sources.Count > 0)
                                 {
                                     <div class="small text-muted mt-1">
                                         @foreach (var source in topic.Sources.OrderByDescending(s => s.Mention).Take(4))
                                         {
-                                            <span class="badge text-bg-light border me-1"
+                                            <span class="badge text-bg-light border me-1" dir="auto"
                                                   title="@source.Mention in this material">
                                                 @(source.Mention == TopicMention.Assessed ? "📝 " : "")@(source.Material?.Title ?? "—")@(string.IsNullOrWhiteSpace(source.SourceReference) ? "" : $" {source.SourceReference}")
                                             </span>
@@ -928,6 +935,7 @@ else
                 }
             </div>
         }
+        </div>
     }
     else if (_activeTab == "inbox")
     {
@@ -1014,15 +1022,15 @@ else
                                     <span class="small text-muted">
                                         @if (suggestion.SourceMaterial is { } src)
                                         {
-                                            <span>@src.Title</span>
+                                            <span dir="auto">@src.Title</span>
                                         }
                                         @if (suggestion.SourceReference is { Length: > 0 } reference)
                                         {
-                                            <span class="badge text-bg-light border ms-1">@reference</span>
+                                            <span class="badge text-bg-light border ms-1" dir="auto">@reference</span>
                                         }
                                         @if (suggestion.Rationale is { Length: > 0 } why)
                                         {
-                                            <span class="ms-1 fst-italic">— @why</span>
+                                            <span class="ms-1 fst-italic" dir="auto">— @why</span>
                                         }
                                     </span>
                                     <span class="text-nowrap">
@@ -1170,6 +1178,15 @@ else
     private string? _inboxError;
     private string _inboxNewDeckName = "";
     private ElementReference _inboxRef;
+    private ElementReference _mapRef;
+    private ElementReference _materialsRef;
+
+    // Topic names, summaries and reasons are authored as markdown with LaTeX in $…$ (the mapping
+    // prompt asks for it explicitly), so they need the same render path as a card. Named short
+    // because the map region uses them a dozen times over.
+    private static MarkupString Md(string? markdown) => (MarkupString)MarkdownRenderer.ToHtml(markdown);
+
+    private static MarkupString MdInline(string? markdown) => (MarkupString)MarkdownRenderer.ToInlineHtml(markdown);
 
     protected override async Task OnParametersSetAsync() => await ReloadAsync();
 
@@ -1189,9 +1206,17 @@ else
 
         var notesVisible = _activeTab == "notes" && !_editingNotes && !string.IsNullOrWhiteSpace(_course?.NotesMarkdown);
         var inboxVisible = _activeTab == "inbox" && _suggestions.Count > 0;
+        // Topic names and summaries carry LaTeX exactly like cards do, and the materials tab
+        // renders topic names too once an assignment plan is expanded.
+        var mapVisible = _activeTab == "map";
+        var materialsVisible = _activeTab == "materials" && _expandedPlanId is not null;
 
         // Suggested cards carry LaTeX just like real ones, so the inbox needs the same pass.
-        var target = notesVisible ? _notesRef : inboxVisible ? _inboxRef : (ElementReference?)null;
+        var target = notesVisible ? _notesRef
+            : inboxVisible ? _inboxRef
+            : mapVisible ? _mapRef
+            : materialsVisible ? _materialsRef
+            : (ElementReference?)null;
         if (target is { } element)
         {
             try
