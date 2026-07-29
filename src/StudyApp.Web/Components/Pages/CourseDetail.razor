@@ -607,8 +607,8 @@ else
             <div>
                 <div class="fw-semibold">What this course covers</div>
                 <div class="text-muted small">
-                    Derived from every ingested material, weighted by what the course is graded on.
-                    Nothing here changes until you approve it.
+                    The <strong>topics</strong> your course covers — not flashcards. Read from every
+                    ingested material and rated by how much the course actually assesses each one.
                 </div>
             </div>
             @if (AiOptions.IsConfigured)
@@ -630,6 +630,27 @@ else
         @if (_jobError is not null)
         {
             <div class="alert alert-danger">@_jobError</div>
+        }
+
+        @* A map run takes a minute or two with nothing to show for it, so say so — otherwise
+           the button just greys out and the page looks broken. *@
+        @if (_activeMapJob is { } running)
+        {
+            <div class="alert alert-info d-flex align-items-center gap-2">
+                <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                <span>
+                    <strong>@JobLabel(running.Kind) in progress…</strong>
+                    This usually takes a minute or two, and keeps running if you navigate away.
+                    Results appear here on their own.
+                </span>
+            </div>
+        }
+        else if (_lastMapJob is { Status: JobStatus.Failed } failed)
+        {
+            <div class="alert alert-danger">
+                <strong>@JobLabel(failed.Kind) failed.</strong>
+                <div class="small mt-1">@failed.Message</div>
+            </div>
         }
 
         @if (_unmappedMaterialCount > 0)
@@ -663,13 +684,18 @@ else
                         </button>
                     </span>
                 </div>
+                <div class="card-body py-2 small text-muted border-bottom">
+                    Accepting updates this <strong>topic list only</strong> — it never creates,
+                    edits or deletes a flashcard. Rejecting discards the change.
+                </div>
                 <ul class="list-group list-group-flush">
                     @foreach (var proposal in pending)
                     {
                         <li class="list-group-item">
                             <div class="d-flex justify-content-between align-items-start flex-wrap gap-2">
                                 <div class="flex-grow-1" style="min-width: 14rem;">
-                                    <span class="badge @ChangeBadge(proposal.Kind) me-1">@proposal.Kind</span>
+                                    <span class="badge @ChangeBadge(proposal.Kind) me-1"
+                                          title="@ChangeHint(proposal.Kind)">@proposal.Kind</span>
                                     <span class="fw-semibold" dir="auto">@proposal.ProposedName</span>
                                     <span class="badge @ImportanceBadge(proposal.ProposedImportance) ms-1">
                                         @proposal.ProposedImportance
@@ -688,6 +714,7 @@ else
                                     {
                                         <div class="small fst-italic" dir="auto">@proposal.Reason</div>
                                     }
+                                    <div class="small text-muted">@ChangeHint(proposal.Kind)</div>
                                 </div>
                                 <span class="text-nowrap">
                                     <button class="btn btn-sm btn-success me-1" @onclick="() => AcceptProposalAsync(proposal.Id)">
@@ -719,20 +746,61 @@ else
 
         @if (_topics.Count == 0)
         {
-            <p class="text-muted">
-                No topics yet.
-                @if (!AiOptions.IsConfigured)
-                {
-                    <span>Set an Anthropic key in <a href="settings">Settings</a> to map this course.</span>
-                }
-                else
-                {
-                    <span>Ingest some material, then map the course to see what it covers.</span>
-                }
-            </p>
+            <div class="card">
+                <div class="card-body">
+                    <h3 class="h6">No topics yet</h3>
+                    <p class="text-muted small mb-2">
+                        Mapping reads your ingested materials and works out what the course covers —
+                        one entry per topic, rated by how much the course assesses it, with the
+                        evidence for that rating. It produces <em>no flashcards</em>; it's what makes
+                        the app able to tell you which parts of the course your cards miss.
+                    </p>
+                    <p class="text-muted small mb-0">
+                        @if (!AiOptions.IsConfigured)
+                        {
+                            <span>Set an Anthropic key in <a href="settings">Settings</a> to map this course.</span>
+                        }
+                        else if (_materials.Count == 0)
+                        {
+                            <span>Upload material on the Materials tab first.</span>
+                        }
+                        else if (_unmappedMaterialCount == _materials.Count)
+                        {
+                            <span>Ingest your material first — mapping reads the extracts, not the files.</span>
+                        }
+                        else
+                        {
+                            <span>Ready — press <strong>Map this course</strong> above.</span>
+                        }
+                    </p>
+                </div>
+            </div>
         }
         else
         {
+            @* Mapping is step one of four, which is why finishing it can feel like nothing
+               happened. Say where you are and what comes next. *@
+            <ol class="map-steps small mb-3">
+                <li class="done">Map the course — <strong>@_topics.Count topics</strong></li>
+                <li class="@(_unlinkedCardCount > 0 ? "now" : "done")">
+                    Link your cards to topics
+                    @if (_unlinkedCardCount > 0)
+                    {
+                        <span>— @_unlinkedCardCount waiting</span>
+                    }
+                </li>
+                <li class="@(_gaps.Count > 0 ? "now" : "done")">
+                    Fill the gaps
+                    @if (_gaps.Count > 0)
+                    {
+                        <span>— @_gaps.Count topic@(_gaps.Count == 1 ? "" : "s") with no cards</span>
+                    }
+                </li>
+                <li class="@(_gaps.Count == 0 && _unlinkedCardCount == 0 ? "now" : "")">
+                    Study, and check the plan before each assignment
+                </li>
+            </ol>
+
             <div class="card mb-3">
                 <div class="card-body py-2">
                     <div class="row g-2 align-items-center">
@@ -1075,6 +1143,21 @@ else
     private bool _hasActiveJobs;
     private string? _jobError;
 
+    /// <summary>The map/coverage run currently in flight, if any — drives the progress banner.</summary>
+    private GenerationJob? _activeMapJob;
+    /// <summary>The most recent finished map/coverage run, so a failure is visible where it was started.</summary>
+    private GenerationJob? _lastMapJob;
+
+    private CancellationTokenSource? _pollCts;
+    private bool _polling;
+
+    /// <summary>
+    /// Long enough that a slow vision pass finishes inside it, bounded so a job that somehow
+    /// never resolves doesn't leave a circuit polling the database forever.
+    /// </summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(3);
+    private const int MaxPolls = 300;
+
     private ProgressReport? _courseProgress;
     private List<DeckProgressRow> _deckProgress = [];
     private List<UnitProgressRow> _unitProgress = [];
@@ -1126,6 +1209,14 @@ else
 
     public async ValueTask DisposeAsync()
     {
+        // Stop the refresh loop first, or it keeps querying for a page nobody is looking at.
+        if (_pollCts is not null)
+        {
+            await _pollCts.CancelAsync();
+            _pollCts.Dispose();
+            _pollCts = null;
+        }
+
         try
         {
             if (_mathJs is not null)
@@ -1169,6 +1260,18 @@ else
         }
         _jobs = await AiJobService.GetRecentAsync(Id);
         _hasActiveJobs = await AiJobService.HasActiveJobsAsync(Id);
+
+        // Picked out of the jobs already loaded above rather than re-queried: the Map tab needs
+        // to show its own runs where they were started, not send the user to the Materials tab
+        // to find out whether anything happened.
+        _activeMapJob = _jobs.FirstOrDefault(j =>
+            j.Kind is JobKind.MapCourse or JobKind.MapCoverage
+            && j.Status is JobStatus.Queued or JobStatus.Running);
+        _lastMapJob = _jobs.FirstOrDefault(j =>
+            j.Kind is JobKind.MapCourse or JobKind.MapCoverage
+            && j.Status is JobStatus.Succeeded or JobStatus.Failed);
+
+        EnsurePolling();
         _spend = await AiJobService.GetSpendAsync(Id);
         _suggestions = await SuggestionService.GetPendingAsync(Id);
         _inboxDeckId ??= _deckStats.FirstOrDefault()?.DeckId;
@@ -1194,6 +1297,55 @@ else
     }
 
     // --- AI ---
+
+    private static string JobLabel(JobKind kind) => kind switch
+    {
+        JobKind.MapCourse => "Course mapping",
+        JobKind.MapCoverage => "Card linking",
+        JobKind.GenerateCards => "Card generation",
+        _ => "Ingestion",
+    };
+
+    /// <summary>
+    /// Refreshes while a run is in flight, so a job that finishes two minutes from now lands on
+    /// screen by itself. Without this the page is indistinguishable from a broken button.
+    /// </summary>
+    private void EnsurePolling()
+    {
+        if (!_hasActiveJobs || _polling)
+            return;
+        _pollCts ??= new CancellationTokenSource();
+        _ = PollAsync(_pollCts.Token);
+    }
+
+    private async Task PollAsync(CancellationToken ct)
+    {
+        _polling = true;
+        try
+        {
+            using var timer = new PeriodicTimer(PollInterval);
+            for (var tick = 0; tick < MaxPolls && _hasActiveJobs; tick++)
+            {
+                if (!await timer.WaitForNextTickAsync(ct))
+                    break;
+                // Back onto the renderer's context: this loop runs on a timer thread, and
+                // component state must not be touched from one.
+                await InvokeAsync(async () =>
+                {
+                    await ReloadAsync();
+                    StateHasChanged();
+                });
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Navigated away mid-run; nothing to report.
+        }
+        finally
+        {
+            _polling = false;
+        }
+    }
 
     private static string JobBadge(JobStatus status) => status switch
     {
@@ -1463,6 +1615,15 @@ else
         TopicChangeKind.Reweight => "text-bg-info",
         TopicChangeKind.Merge => "text-bg-primary",
         _ => "text-bg-secondary",
+    };
+
+    /// <summary>Plain English for what accepting this kind of change actually does.</summary>
+    private static string ChangeHint(TopicChangeKind kind) => kind switch
+    {
+        TopicChangeKind.Add => "Adds a topic the map didn't have.",
+        TopicChangeKind.Reweight => "Changes how important an existing topic is — new material says so.",
+        TopicChangeKind.Merge => "Folds two entries that turned out to be the same concept into one.",
+        _ => "Sets a topic aside — no material supports it any more. It isn't deleted.",
     };
 
     private static string PlanActionBadge(StudyAction action) => action switch
