@@ -56,4 +56,91 @@ public class SessionQueueBuilderTests
         var queue = SessionQueueBuilder.Build(cards, Cutoff);
         Assert.Equal(50, queue.Count);
     }
+
+    // --- practice: drilling a narrow scope past what's due ---
+
+    private static ProgressPolicy Progress() =>
+        new(new FakeTimeProvider(new DateTimeOffset(Cutoff, TimeSpan.Zero)));
+
+    /// <summary>A card whose interval is nearly elapsed reads weaker than one just reviewed.</summary>
+    private static Card EarlyCard(double intervalDays, double elapsedFraction) => new()
+    {
+        State = CardState.Review,
+        IntervalDays = intervalDays,
+        Due = Cutoff.AddDays(intervalDays * (1 - elapsedFraction)),
+    };
+
+    [Fact]
+    public void Practice_Keeps_The_Cards_A_Normal_Session_Drops()
+    {
+        var queue = SessionQueueBuilder.BuildPractice([DueCard(), NotYetDue()], Cutoff, Progress());
+        Assert.Equal(2, queue.Count);
+    }
+
+    [Fact]
+    public void Practice_Puts_Due_Cards_Before_Early_Ones()
+    {
+        var due = DueCard();
+        var queue = SessionQueueBuilder.BuildPractice(
+            [NotYetDue(), due, NotYetDue()], Cutoff, Progress(), rng: new Random(42));
+
+        Assert.Same(due, queue[0]);
+    }
+
+    /// <summary>
+    /// The order that makes a drill worth doing: the memory most likely to have decayed comes first.
+    /// </summary>
+    [Fact]
+    public void Practice_Orders_Early_Cards_Weakest_First()
+    {
+        var fresh = EarlyCard(intervalDays: 20, elapsedFraction: 0.05);
+        var faded = EarlyCard(intervalDays: 20, elapsedFraction: 0.9);
+
+        var queue = SessionQueueBuilder.BuildPractice([fresh, faded], Cutoff, Progress());
+
+        Assert.Same(faded, queue[0]);
+        Assert.Same(fresh, queue[1]);
+    }
+
+    [Fact]
+    public void Practice_Still_Caps_New_Cards()
+    {
+        var cards = Enumerable.Range(0, 30).Select(_ => New()).ToList();
+        var queue = SessionQueueBuilder.BuildPractice(cards, Cutoff, Progress());
+
+        Assert.Equal(SessionQueueBuilder.MaxNewPerSession, queue.Count);
+    }
+
+    [Fact]
+    public void Practice_Excludes_Deleted_Cards()
+    {
+        var deleted = NotYetDue();
+        deleted.IsDeleted = true;
+
+        var queue = SessionQueueBuilder.BuildPractice([deleted, NotYetDue()], Cutoff, Progress());
+        Assert.Single(queue);
+    }
+
+    /// <summary>
+    /// A practice grade never moves the card into Learning, so the state-based signal a normal
+    /// session relies on is absent — which would silently drop the card you just got wrong.
+    /// </summary>
+    [Fact]
+    public void A_Practice_Again_Requeues_Even_Though_The_State_Never_Changed()
+    {
+        var card = NotYetDue();
+
+        Assert.True(SessionQueueBuilder.Requeues(card, ReviewGrade.Again, practice: true));
+        Assert.False(SessionQueueBuilder.Requeues(card, ReviewGrade.Good, practice: true));
+    }
+
+    [Fact]
+    public void A_Normal_Grade_Requeues_On_State_Not_Grade()
+    {
+        var learning = new Card { State = CardState.Learning };
+        var graduated = new Card { State = CardState.Review };
+
+        Assert.True(SessionQueueBuilder.Requeues(learning, ReviewGrade.Again, practice: false));
+        Assert.False(SessionQueueBuilder.Requeues(graduated, ReviewGrade.Again, practice: false));
+    }
 }

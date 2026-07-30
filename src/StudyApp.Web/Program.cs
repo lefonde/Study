@@ -170,6 +170,7 @@ builder.Services.AddScoped<ProgressSnapshotService>();
 // Pure planning logic, so a singleton policy plus a scoped service over the DbContext factory.
 builder.Services.AddSingleton<StudyPlanPolicy>();
 builder.Services.AddScoped<StudyPlanService>();
+builder.Services.AddScoped<StudyScopeService>();
 
 // AI pipeline. The runner is a singleton BackgroundService; the per-job services are scoped
 // because they use the DbContext factory and are resolved per job.

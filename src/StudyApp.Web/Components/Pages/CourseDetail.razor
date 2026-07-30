@@ -220,6 +220,14 @@ else
                                     }
                                 </span>
                                 <div class="d-flex gap-1">
+                                    @* A chapter's session includes its lessons' cards, so the button
+                                       has to appear when a lesson has them even if the chapter node
+                                       itself holds none. *@
+                                    @if (UnitIsStudyable(chapter.Id))
+                                    {
+                                        <a class="btn btn-sm btn-outline-primary" href="review/unit/@chapter.Id?all=true"
+                                           title="Practise this chapter and everything under it">▶</a>
+                                    }
                                     <button class="btn btn-sm btn-outline-primary" @onclick="() => SetPositionAsync(chapter.Id)">Set as position</button>
                                     <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartRename(chapter)">✏</button>
                                     <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteUnitAsync(chapter.Id)">✕</button>
@@ -255,6 +263,11 @@ else
                                             }
                                         </span>
                                         <div class="d-flex gap-1">
+                                            @if (UnitIsStudyable(lesson.Id))
+                                            {
+                                                <a class="btn btn-sm btn-outline-primary" href="review/unit/@lesson.Id?all=true"
+                                                   title="Practise just this lesson">▶</a>
+                                            }
                                             <button class="btn btn-sm btn-outline-primary" @onclick="() => SetPositionAsync(lesson.Id)">Set as position</button>
                                             <button class="btn btn-sm btn-outline-secondary" @onclick="() => StartRename(lesson)">✏</button>
                                             <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteUnitAsync(lesson.Id)">✕</button>
@@ -1099,6 +1112,10 @@ else
                         {
                             <div class="graph-stage-label" style="grid-column: @(stage.Index + 1); grid-row: 1;">
                                 Stage @(stage.Index + 1)
+                                @* Studying a whole rung is the natural unit here: nothing in a stage
+                                   depends on anything later in the course. *@
+                                <a class="graph-stage-study" href="review/stage/@Id/@stage.Index?all=true"
+                                   title="Practise every card in this stage">▶</a>
                             </div>
                         }
 
@@ -1265,6 +1282,14 @@ else
                                 }
                             </div>
                             <span class="text-nowrap d-flex gap-1 align-items-start">
+                                @* Only offered where there is something to study: a topic with no
+                                   linked cards would open an empty session. *@
+                                @if (CardsFor(topic.Id) > 0)
+                                {
+                                    <a class="btn btn-sm btn-outline-primary"
+                                       href="review/topic/@topic.Id?all=true"
+                                       title="Practise just this topic — won't move any due dates">▶</a>
+                                }
                                 <select class="form-select form-select-sm" style="width: auto;"
                                         title="Set importance yourself — this pins it"
                                         @onchange="e => SetTopicImportanceAsync(topic.Id, (string?)e.Value)">
@@ -1939,6 +1964,19 @@ else
     private List<CourseUnit> ChildrenOf(Guid parentId) =>
         _allUnits.Where(u => u.ParentId == parentId).OrderBy(u => u.Order).ToList();
 
+    /// <summary>
+    /// Whether studying this unit would produce anything — which means <b>including its
+    /// descendants</b>, because that is what a unit-scoped session covers.
+    ///
+    /// Deliberately not the same test as the mastery badge beside it: <c>UnitProgressFor</c> reports
+    /// each unit alone so this tab doesn't count a card once for the chapter and again for its
+    /// lesson. Gating the study button on that figure hid it on every chapter whose cards all live in
+    /// its lessons — which is the normal case.
+    /// </summary>
+    private bool UnitIsStudyable(Guid unitId) =>
+        UnitTree.WithDescendants(_allUnits, unitId)
+            .Any(id => UnitProgressFor(id) is { Total: > 0 });
+
     private string UnitPath(Guid unitId)
     {
         var unit = _allUnits.FirstOrDefault(u => u.Id == unitId);
@@ -2184,10 +2222,7 @@ else
     /// </summary>
     private void RebuildProgression()
     {
-        var edges = _topics
-            .SelectMany(t => t.Prerequisites)
-            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
-            .ToList();
+        var edges = PrerequisiteGraph.EdgesOf(_topics);
 
         if (_isolatedTopicId is not { } focus || _topics.All(t => t.Id != focus))
         {

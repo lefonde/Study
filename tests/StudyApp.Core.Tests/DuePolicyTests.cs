@@ -68,4 +68,40 @@ public class DuePolicyTests
         Assert.False(PolicyAt(LateEvening).IsDueToday(card));
         Assert.False(PolicyAt(LateEvening).IsDueTomorrow(card));
     }
+
+    // --- practice: reviewing something the scheduler hasn't asked for ---
+
+    [Fact]
+    public void A_Card_Due_Today_Is_Not_Ahead_Of_Schedule()
+    {
+        var policy = PolicyAt(LateEvening);
+        var card = ReviewCard(LateEvening.UtcDateTime.AddMinutes(30));
+
+        Assert.True(policy.IsDueToday(card));
+        Assert.False(policy.IsAheadOfSchedule(card));
+    }
+
+    [Fact]
+    public void A_Card_Due_Tomorrow_Is_Ahead_Of_Schedule()
+    {
+        var policy = PolicyAt(LateEvening);
+        Assert.True(policy.IsAheadOfSchedule(ReviewCard(LateEvening.UtcDateTime.AddDays(1))));
+    }
+
+    /// <summary>
+    /// Introducing a new card is what an ordinary session does. Counting it as practice would mean a
+    /// scoped session could never teach anything new, since nothing would ever leave New.
+    /// </summary>
+    [Fact]
+    public void A_New_Card_Is_Never_Ahead_Of_Schedule()
+    {
+        Assert.False(PolicyAt(LateEvening).IsAheadOfSchedule(new Card { State = CardState.New }));
+    }
+
+    [Fact]
+    public void An_Overdue_Card_Is_Not_Ahead_Of_Schedule()
+    {
+        Assert.False(PolicyAt(LateEvening).IsAheadOfSchedule(
+            ReviewCard(LateEvening.UtcDateTime.AddDays(-9))));
+    }
 }

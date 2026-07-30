@@ -251,6 +251,36 @@ call to fix, and one bad link distorts everything below it. Loops are refused by
 everything unrelated dims, so which subjects feed which deadline is something you see rather than
 work out.
 
+## Practising one thing instead of everything
+
+**Home → Practise something specific** (`/study`) lists every way the collection is already
+organised, per course, with a card count and what's due on each row:
+
+- **Stages** — the rungs of the learning path. Nothing in a stage depends on anything later in the
+  course, so this is the order to work through.
+- **Chapters & lessons** — the course's own structure. A chapter includes everything under it.
+- **Topics** — one concept at a time, the finest grain.
+- **Decks** — how the cards happen to be filed.
+
+Every row offers two things. **▶ Due** is ordinary spaced repetition, narrowed. **⟳ Practise all**
+adds the cards that aren't due yet, ordered weakest-memory-first — which is what you want the week
+before an exam, when almost nothing in the chapter is scheduled for today.
+
+The same ▶ appears where each hierarchy is already on screen: beside each stage on the Map's Path
+view, on each topic in the List view, and on each chapter and lesson in Structure.
+
+> **Practising early never moves a due date.** A card graded before it's due is *practice*: its
+> interval, due date, repetition count and lapses are all left exactly as they were, and the session
+> says so on screen. Only cards that were genuinely due advance. The reasoning is spelled out under
+> *Practice vs review* on the **How it works** page — briefly, an early success isn't evidence the
+> interval was too short, so letting it stretch the schedule would mean drilling a topic
+> pushed all its cards further away and inflated its mastery figure at the same time. Practice
+> reviews are still recorded; they're just left out of the retention statistic.
+
+Topics and stages can only see cards that have been **linked** to a topic — by *Link cards* or by
+gap-targeted generation. A course with unlinked cards says so at the top, with the count, rather
+than quietly drilling a subset.
+
 ## Before an assignment
 
 Give an assignment a **due date** and its **📋 Plan** says what stands between you and it. It has
@@ -303,6 +333,10 @@ topic or define a term.
   placed on it; plans that reach past what an assignment literally tests into the foundations it
   rests on; assignment-scoped review sessions and a submitted flag; and solution upload with
   per-question feedback that names the topic each mistake turns on
+- ✅ v0.7: **study what you choose** — review scoped to a learning-path stage, a chapter (and
+  everything under it) or a single topic, chosen from one page that lays out every hierarchy the app
+  already holds; plus practice, which lets you drill a scope past what's due without moving a single
+  due date
 - next: **practice exams** generated from what the course actually assesses — the reason
   assessment materials keep their full text and `TopicMention.Assessed` is recorded
 - Scheduler: SM-2 today behind an `IScheduler` seam; FSRS is a drop-in swap later — though FSRS

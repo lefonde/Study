@@ -417,4 +417,31 @@ public class PrerequisiteGraphTests
         Assert.Equal([g.Id("T7")], map.UnlockedBy(g.Id("T3")));
         Assert.Empty(map.UnlockedBy(g.Id("T10")));
     }
+
+    /// <summary>
+    /// Every caller with topics in hand needs the same projection off <c>Prerequisites</c>, and the
+    /// direction matters: the row's own topic is the dependent one, the other end comes first.
+    /// </summary>
+    [Fact]
+    public void Edges_Are_Read_Off_The_Topics_In_The_Right_Direction()
+    {
+        var first = new CourseTopic { Name = "Semaphores" };
+        var second = new CourseTopic { Name = "Bounded buffer" };
+        second.Prerequisites.Add(new TopicPrerequisite
+        {
+            CourseTopicId = second.Id,
+            PrerequisiteTopicId = first.Id,
+        });
+
+        var edges = PrerequisiteGraph.EdgesOf([first, second]);
+
+        Assert.Equal([new TopicEdge(second.Id, first.Id)], edges);
+        Assert.Equal(1, PrerequisiteGraph.Build([first, second], edges).StageByTopic[second.Id]);
+    }
+
+    [Fact]
+    public void Topics_With_No_Prerequisites_Produce_No_Edges()
+    {
+        Assert.Empty(PrerequisiteGraph.EdgesOf([new CourseTopic { Name = "T1" }]));
+    }
 }

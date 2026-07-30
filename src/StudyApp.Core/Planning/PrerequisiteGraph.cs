@@ -60,6 +60,19 @@ public record ProgressionMap(
 public static class PrerequisiteGraph
 {
     /// <summary>
+    /// The edge set carried by a loaded set of topics, ready for <see cref="Build"/>.
+    ///
+    /// Every caller that has topics in hand needs this same projection off
+    /// <see cref="CourseTopic.Prerequisites"/>, and three copies of it is three chances for one of
+    /// them to drift. Requires the topics to have been loaded with their prerequisites included —
+    /// <c>CourseMapService.GetTopicsAsync</c> does.
+    /// </summary>
+    public static List<TopicEdge> EdgesOf(IEnumerable<CourseTopic> topics) =>
+        [.. topics
+            .SelectMany(t => t.Prerequisites)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))];
+
+    /// <summary>
     /// Lays topics out in stages by longest path: a topic sits one stage after the deepest thing
     /// it needs. Longest path rather than shortest, because a topic is only genuinely reachable
     /// once <i>every</i> prerequisite is — taking the shortest would place it before something it

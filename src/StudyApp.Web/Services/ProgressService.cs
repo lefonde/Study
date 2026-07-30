@@ -112,12 +112,19 @@ public class ProgressService(IDbContextFactory<StudyDbContext> factory, Progress
         return policy.Forecast(cards, targetDateUtc);
     }
 
+    /// <summary>
+    /// Practice reviews are excluded, which is the only reason <see cref="ReviewLog.IsPractice"/>
+    /// exists. The single figure these logs feed is <c>Retention</c> — "did you recall it when the
+    /// scheduler predicted you were about to forget" — and a card you chose to drill early was never
+    /// asked that question. Including them would lift retention a little every time a topic was
+    /// drilled, which is the one direction a memory statistic must not drift for free.
+    /// </summary>
     private async Task<List<ReviewLog>> RecentLogsAsync(
         StudyDbContext db, System.Linq.Expressions.Expression<Func<ReviewLog, bool>> scope)
     {
         var windowStart = policy.RetentionWindowStartUtc();
         return await db.ReviewLogs.AsNoTracking()
-            .Where(l => l.ReviewedAt >= windowStart)
+            .Where(l => l.ReviewedAt >= windowStart && !l.IsPractice)
             .Where(scope)
             .ToListAsync();
     }

@@ -155,6 +155,21 @@
     align-self: end;
 }
 
+/* Practise a whole rung. z-index above the connector SVG, which spans the grid and would otherwise
+   swallow the click. */
+.graph-stage-study {
+    position: relative;
+    z-index: 1;
+    margin-inline-start: 0.35em;
+    text-decoration: none;
+    opacity: 0.45;
+}
+
+.graph-stage-study:hover,
+.graph-stage-study:focus-visible {
+    opacity: 1;
+}
+
 .graph-node {
     position: relative;
     z-index: 1;

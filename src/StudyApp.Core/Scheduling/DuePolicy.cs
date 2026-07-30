@@ -33,4 +33,20 @@ public class DuePolicy(TimeProvider timeProvider)
     public bool IsDueTomorrow(Card card) =>
         card.State != CardState.New && card.Due is { } due
         && due >= TodayCutoffUtc() && due < TomorrowCutoffUtc();
+
+    /// <summary>
+    /// True when grading this card would be reviewing it <i>early</i> — the scheduler has not asked
+    /// for it yet.
+    ///
+    /// This is what separates practice from review, and it lives here because "due" semantics live
+    /// only in this class. A card the user chose to drill ahead of time says nothing about whether
+    /// its interval was right, so the caller must leave its schedule alone; a due card graded in the
+    /// same session is an ordinary review.
+    ///
+    /// A New card is never ahead of schedule. It has no interval to protect and introducing new
+    /// cards is exactly what a normal session does — treating them as practice would mean a scoped
+    /// session could never actually teach anything new.
+    /// </summary>
+    public bool IsAheadOfSchedule(Card card) =>
+        card.State != CardState.New && card.Due is { } due && due >= TodayCutoffUtc();
 }

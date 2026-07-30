@@ -31,13 +31,16 @@ else if (_summary.Courses.Count == 0)
 }
 else
 {
+    @* The daily path stays one click: this button always means "everything due, everywhere".
+       Choosing a narrower scope is a deliberate second option, not a step in the way. *@
     @if (_summary.HasAnythingToStudy)
     {
-        <div class="mb-4">
+        <div class="mb-4 d-flex align-items-center flex-wrap gap-3">
             <a class="btn btn-primary btn-lg" href="review">
                 ▶ Start review
                 <span class="badge text-bg-light ms-2">@(_summary.TotalDue + _summary.TotalNew)</span>
             </a>
+            <a href="study">Practise something specific →</a>
         </div>
     }
     else
@@ -52,6 +55,10 @@ else
             {
                 <span> Nothing scheduled for tomorrow yet. Add more cards from your <a href="courses">courses</a>.</span>
             }
+            <div class="mt-2">
+                Want to work anyway? <a href="study">Practise a specific topic, chapter or stage</a> —
+                it won't move any due dates.
+            </div>
         </div>
     }
 

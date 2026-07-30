@@ -2,6 +2,9 @@
 @page "/review/course/{CourseId:guid}"
 @page "/review/deck/{DeckId:guid}"
 @page "/review/assignment/{AssignmentId:guid}"
+@page "/review/unit/{UnitId:guid}"
+@page "/review/topic/{TopicId:guid}"
+@page "/review/stage/{CourseId:guid}/{Stage:int}"
 @implements IAsyncDisposable
 @inject ReviewService ReviewService
 @inject ProgressSnapshotService ProgressSnapshotService
@@ -15,7 +18,9 @@
 }
 else if (_queue.Count == 0)
 {
-    <div class="text-center py-5">
+    @* @ref carries the scope's name, which is markdown with LaTeX for a topic — OnAfterRenderAsync
+       hands this to renderMath. Only one of these branches ever renders, so one ref covers them. *@
+    <div class="text-center py-5" @ref="_scopeRef">
         @if (AssignmentId is not null && _assignment is null)
         {
             <p class="display-6">No plan for this one</p>
@@ -31,6 +36,43 @@ else if (_queue.Count == 0)
                 Nothing needs work before then.
             </p>
             <a class="btn btn-outline-secondary" href="courses/@done.CourseId">Back to the course</a>
+        }
+        else if (_scoped is { InScope: 0 } empty)
+        {
+            @* An empty narrow scope is nearly always a linking problem rather than a study one, and
+               saying "nothing to review" would send the user off to study something else. *@
+            <p class="display-6">No cards here yet</p>
+            <p class="lead text-muted">
+                Nothing is attached to
+                <strong class="md-content d-inline-block" dir="auto">@MdInline(empty.Title)</strong>.
+                @if (CurrentScope().Kind is ReviewScopeKind.Topic or ReviewScopeKind.Stage)
+                {
+                    <span>
+                        Only cards linked to a topic can be studied this way — run
+                        <em>🔗 Link cards</em> on the course, or write cards for the gap.
+                    </span>
+                }
+            </p>
+            @if (empty.CourseId is { } emptyCourse)
+            {
+                <a class="btn btn-outline-secondary" href="courses/@emptyCourse">Back to the course</a>
+            }
+        }
+        else if (_scoped is { DueNow: 0, InScope: > 0 } settled && !All)
+        {
+            @* Distinct from "nothing at all": there IS material here, it just isn't due. Offering to
+               drill it anyway is the whole point of the narrow scopes. *@
+            <p class="display-6">
+                Nothing due in
+                <span class="md-content d-inline-block" dir="auto">@MdInline(settled.Title)</span> 🎉
+            </p>
+            <p class="lead text-muted">
+                All @settled.InScope card@(settled.InScope == 1 ? "" : "s") here are scheduled further out.
+            </p>
+            <a class="btn btn-outline-primary" href="@ScopeUrl(practise: true)">
+                ⟳ Practise all @settled.InScope anyway
+            </a>
+            <p class="small text-muted mt-2">Practising early won't move any due dates.</p>
         }
         else
         {
@@ -60,6 +102,21 @@ else if (_index >= _queue.Count)
                 spread over the next sessions rather than crammed into this one.
             </p>
         }
+        else if (_scoped is { NewHeldBack: > 0 } scopedHeld)
+        {
+            <p class="text-muted">
+                @scopedHeld.NewHeldBack more new card@(scopedHeld.NewHeldBack == 1 ? "" : "s") waiting
+                here — spread over the next sessions rather than crammed into this one.
+            </p>
+        }
+        @if (_practiceCount > 0)
+        {
+            <p class="text-muted">
+                ⟳ @_practiceCount of those @(_practiceCount == 1 ? "was" : "were") practice, graded
+                ahead of schedule. @(_practiceCount == 1 ? "Its" : "Their") due
+                date@(_practiceCount == 1 ? "" : "s") @(_practiceCount == 1 ? "is" : "are") unchanged.
+            </p>
+        }
         @if (_lastAction is not null)
         {
             <button class="btn btn-link" @onclick="UndoAsync">↩ Undo last grade</button>
@@ -85,6 +142,27 @@ else
                 Studying for <strong>@scope.Title</strong> —
                 @DaysLeft(scope.DueDateUtc), and these are the cards that won't
                 still be solid by then.
+            </div>
+        }
+        else if (_scoped is { } narrowed && CurrentScope().Kind != ReviewScopeKind.Everything)
+        {
+            <div class="alert alert-secondary py-2 small mb-3" @ref="_scopeRef">
+                <span>Studying </span>
+                <strong class="md-content d-inline-block" dir="auto">@MdInline(narrowed.Title)</strong>
+                @if (narrowed.Note is { } note)
+                {
+                    <span class="text-muted"> · @note</span>
+                }
+                @* Something that deliberately does not touch your schedule has to say so, or it
+                   reads as a bug the first time a due date fails to move. *@
+                @if (narrowed.PracticeCount > 0)
+                {
+                    <div class="mt-1">
+                        ⟳ @narrowed.PracticeCount of these @(narrowed.PracticeCount == 1 ? "is" : "are")
+                        ahead of schedule — grading @(narrowed.PracticeCount == 1 ? "it" : "them")
+                        won't move any due dates.
+                    </div>
+                }
             </div>
         }
         <div class="d-flex justify-content-between align-items-center mb-3">
@@ -138,14 +216,28 @@ else
     [Parameter] public Guid? CourseId { get; set; }
     [Parameter] public Guid? DeckId { get; set; }
     [Parameter] public Guid? AssignmentId { get; set; }
+    [Parameter] public Guid? UnitId { get; set; }
+    [Parameter] public Guid? TopicId { get; set; }
+    /// <summary>Nullable so "no stage in the route" is distinguishable from stage 0.</summary>
+    [Parameter] public int? Stage { get; set; }
+
+    /// <summary>
+    /// Include cards the scheduler hasn't asked for yet. Their schedule is left untouched when
+    /// graded — see <see cref="DuePolicy.IsAheadOfSchedule"/> — so this drills a topic without
+    /// distorting it.
+    /// </summary>
+    [SupplyParameterFromQuery(Name = "all")] public bool All { get; set; }
 
     private AssignmentSession? _assignment;
+    private ScopedSession? _scoped;
 
     private List<Card>? _queue;
     private int _index;
     private bool _revealed;
     private int _reviewCount;
     private int _againCount;
+    /// <summary>Grades that landed on a card ahead of its due date, so left its schedule alone.</summary>
+    private int _practiceCount;
     private (Card Card, GradeResult Result, ReviewGrade Grade, bool Requeued, int PrevIndex)? _lastAction;
     private bool _snapshotsCaptured;
 
@@ -153,28 +245,68 @@ else
     private IJSObjectReference? _mathJs;
     private DotNetObjectReference<Review>? _selfRef;
     private ElementReference _cardBodyRef;
+    /// <summary>Whichever element currently holds the scope's name — banner or empty state.</summary>
+    private ElementReference _scopeRef;
     private bool _grading;
 
+    private static MarkupString MdInline(string? markdown) =>
+        (MarkupString)MarkdownRenderer.ToInlineHtml(markdown);
+
+    /// <summary>
+    /// This page's own URL for the current scope. Used by the "practise anyway" offer, so it has to
+    /// reproduce the route the user arrived on rather than assume one.
+    /// </summary>
+    private string ScopeUrl(bool practise)
+    {
+        var scope = CurrentScope();
+        var path = scope.Kind switch
+        {
+            ReviewScopeKind.Deck => $"review/deck/{scope.Id}",
+            ReviewScopeKind.Unit => $"review/unit/{scope.Id}",
+            ReviewScopeKind.Topic => $"review/topic/{scope.Id}",
+            ReviewScopeKind.Stage => $"review/stage/{scope.CourseId}/{scope.Stage}",
+            ReviewScopeKind.Course => $"review/course/{scope.Id}",
+            _ => "review",
+        };
+        return practise ? $"{path}?all=true" : path;
+    }
+
     // Tracks which scope the queue was last built for, since Blazor reuses this component
-    // instance across the three /review routes (they all map here) — without this, navigating
-    // between them (e.g. deck review -> global review via the nav menu) would keep showing the
+    // instance across every /review route (they all map here) — without this, navigating
+    // between them (e.g. topic drill -> global review via the nav menu) would keep showing the
     // stale queue from whichever scope loaded first.
+    //
+    // Every route parameter has to be compared, including `all`: a parameter left out of this check
+    // is a scope the page silently refuses to switch to.
     private bool _initialized;
-    private Guid? _builtCourseId;
-    private Guid? _builtDeckId;
+    private ReviewScope? _builtScope;
     private Guid? _builtAssignmentId;
+    private bool _builtAll;
 
     protected override async Task OnParametersSetAsync()
     {
-        if (_initialized && _builtCourseId == CourseId && _builtDeckId == DeckId
-            && _builtAssignmentId == AssignmentId)
+        var scope = CurrentScope();
+        if (_initialized && _builtScope == scope && _builtAssignmentId == AssignmentId
+            && _builtAll == All)
             return;
         _initialized = true;
-        _builtCourseId = CourseId;
-        _builtDeckId = DeckId;
+        _builtScope = scope;
         _builtAssignmentId = AssignmentId;
+        _builtAll = All;
         await ResetSessionAsync();
     }
+
+    /// <summary>
+    /// Which slice the current route asks for. Stage is tested before Course because the stage route
+    /// supplies both, and a stage is the narrower of the two.
+    /// </summary>
+    private ReviewScope CurrentScope() =>
+        DeckId is { } d ? ReviewScope.ForDeck(d)
+        : UnitId is { } u ? ReviewScope.ForUnit(u)
+        : TopicId is { } t ? ReviewScope.ForTopic(t)
+        : Stage is { } s && CourseId is { } stageCourse ? ReviewScope.ForStage(stageCourse, s)
+        : CourseId is { } c ? ReviewScope.ForCourse(c)
+        : ReviewScope.Everything;
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
@@ -211,6 +343,19 @@ else
                 // unhandled exception here terminates the whole circuit.
             }
         }
+
+        // The scope's name is markdown with LaTeX when the scope is a topic, so the banner and the
+        // empty states need their own pass. Same guard for the same reason as above.
+        if (_mathJs is not null && _scoped is not null)
+        {
+            try
+            {
+                await _mathJs.InvokeVoidAsync("renderMath", _scopeRef);
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+            }
+        }
     }
 
     [JSInvokable]
@@ -245,12 +390,15 @@ else
             var card = _queue[_index];
             var result = await ReviewService.GradeAsync(card, grade);
 
-            // Cards still in learning (Again, or Hard while learning) come back later this session.
-            var requeued = card.State == CardState.Learning;
+            // Cards still in learning (Again, or Hard while learning) come back later this session —
+            // except in practice, where the state never moved and the grade is the only signal.
+            var requeued = SessionQueueBuilder.Requeues(card, grade, result.WasPractice);
             if (requeued)
                 _queue.Add(card);
             if (grade == ReviewGrade.Again)
                 _againCount++;
+            if (result.WasPractice)
+                _practiceCount++;
 
             _lastAction = (card, result, grade, requeued, _index);
             _reviewCount++;
@@ -305,6 +453,8 @@ else
         _reviewCount--;
         if (last.Grade == ReviewGrade.Again)
             _againCount--;
+        if (last.Result.WasPractice)
+            _practiceCount--;
         _lastAction = null;
     }
 
@@ -327,18 +477,21 @@ else
         if (AssignmentId is { } assignmentId)
         {
             _assignment = await ReviewService.BuildAssignmentSessionAsync(assignmentId);
+            _scoped = null;
             _queue = _assignment?.Queue ?? [];
         }
         else
         {
             _assignment = null;
-            _queue = await ReviewService.BuildSessionAsync(CourseId, DeckId);
+            _scoped = await ReviewService.BuildScopedSessionAsync(CurrentScope(), All);
+            _queue = _scoped.Queue;
         }
 
         _index = 0;
         _revealed = false;
         _reviewCount = 0;
         _againCount = 0;
+        _practiceCount = 0;
         _lastAction = null;
         _snapshotsCaptured = false;
     }

@@ -1,0 +1,228 @@
+@page "/study"
+@implements IAsyncDisposable
+@inject StudyScopeService StudyScopeService
+@inject IJSRuntime JS
+
+<PageTitle>StudyApp — Practise</PageTitle>
+
+@* One @ref for the whole page: topic and chapter names are markdown with LaTeX, so KaTeX needs a
+   pass over them after render. *@
+<div @ref="_pageRef">
+
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-2">
+    <h1 class="mb-0">Practise something specific</h1>
+    <a href="how-it-works" class="small">How review &amp; mastery work</a>
+</div>
+<p class="text-muted">
+    ▶ studies what's <strong>due</strong> in that scope, as usual.
+    ⟳ adds the cards that aren't due yet — useful before an exam, and it never moves a due date.
+</p>
+
+@if (_courses is null)
+{
+    <p><em>Loading…</em></p>
+}
+else if (_courses.Count == 0)
+{
+    <div class="text-center py-5">
+        <p class="display-6">Nothing to practise yet</p>
+        <p class="lead text-muted">Add a course with some cards in it and this page fills itself in.</p>
+        <a class="btn btn-primary" href="courses">Go to courses</a>
+    </div>
+}
+else
+{
+    foreach (var course in _courses)
+    {
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between flex-wrap gap-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="course-dot" style="background:@course.Color"></span>
+                    <a class="fw-semibold text-decoration-none" href="courses/@course.CourseId" dir="auto">
+                        @course.Name
+                    </a>
+                    <span class="text-muted small">
+                        @course.Cards card@(course.Cards == 1 ? "" : "s")
+                        @if (course.Due > 0)
+                        {
+                            <span>· @course.Due due</span>
+                        }
+                    </span>
+                </div>
+                <div class="d-flex gap-2">
+                    <a class="btn btn-sm @(course.Due > 0 ? "btn-primary" : "btn-outline-secondary")"
+                       href="review/course/@course.CourseId">▶ Due @course.Due</a>
+                    <a class="btn btn-sm btn-outline-primary"
+                       href="review/course/@course.CourseId?all=true">⟳ All @course.Cards</a>
+                </div>
+            </div>
+
+            <div class="card-body pt-2">
+                @if (course.UnlinkedCards > 0)
+                {
+                    @* Topic and stage scopes are blind to unlinked cards, so a course that was never
+                       linked would quietly drill a subset. Say it here rather than let a session
+                       look complete. *@
+                    <div class="alert alert-warning py-2 small d-flex flex-wrap gap-2 align-items-center">
+                        <span>
+                            ⚠ @course.UnlinkedCards card@(course.UnlinkedCards == 1 ? "" : "s")
+                            @(course.UnlinkedCards == 1 ? "isn't" : "aren't") linked to any topic, so
+                            @(course.UnlinkedCards == 1 ? "it won't" : "they won't") appear under
+                            Stages or Topics below.
+                        </span>
+                        <a class="btn btn-sm btn-outline-secondary" href="courses/@course.CourseId">
+                            🔗 Link cards
+                        </a>
+                    </div>
+                }
+
+                @foreach (var group in course.Groups)
+                {
+                    var key = $"{course.CourseId}:{group.Title}";
+                    var open = IsOpen(key, group);
+
+                    <div class="scope-group">
+                        <button class="btn btn-link scope-group-toggle text-decoration-none p-0"
+                                @onclick="() => Toggle(key, group)">
+                            <span class="scope-caret">@(open ? "▾" : "▸")</span>
+                            <span class="fw-semibold">@group.Title</span>
+                            <span class="badge text-bg-light ms-1">@group.Rows.Count</span>
+                        </button>
+
+                        @if (open)
+                        {
+                            <p class="text-muted small mb-2 ms-3">@group.Hint</p>
+
+                            @if (group.Rows.Count == 0)
+                            {
+                                <p class="text-muted small ms-3 mb-2"><em>Nothing here yet.</em></p>
+                            }
+                            else
+                            {
+                                <div class="scope-rows">
+                                    @foreach (var row in group.Rows)
+                                    {
+                                        <div class="scope-row" style="--depth:@row.Depth">
+                                            <div class="scope-name md-content" dir="auto">
+                                                @MdInline(row.Name)
+                                            </div>
+                                            <div class="scope-counts text-muted small">
+                                                @row.Cards card@(row.Cards == 1 ? "" : "s")
+                                                @if (row.New > 0)
+                                                {
+                                                    <span>· @row.New new</span>
+                                                }
+                                                <span class="scope-mastery">
+                                                    · @((row.Mastery * 100).ToString("0"))% mastered
+                                                </span>
+                                            </div>
+                                            <div class="scope-actions">
+                                                <a class="btn btn-sm @(row.Due > 0 ? "btn-primary" : "btn-outline-secondary")"
+                                                   href="@Url(row.Scope, practise: false)">▶ @row.Due</a>
+                                                <a class="btn btn-sm btn-outline-primary"
+                                                   href="@Url(row.Scope, practise: true)">⟳ @row.Cards</a>
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            }
+
+                            @if (group.Note is { } note)
+                            {
+                                <p class="text-muted small ms-3 mt-2 mb-2">@note</p>
+                            }
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    }
+}
+
+</div>
+
+@code {
+    private List<CourseScopes>? _courses;
+
+    /// <summary>
+    /// Which groups the user has toggled away from their default. Stages open by default because the
+    /// learning path is the answer to "what should I do next"; the rest stay shut so a forty-topic
+    /// course doesn't open as a wall of rows.
+    /// </summary>
+    private readonly HashSet<string> _toggled = [];
+
+    private IJSObjectReference? _mathJs;
+    private ElementReference _pageRef;
+
+    private static MarkupString MdInline(string? markdown) =>
+        (MarkupString)MarkdownRenderer.ToInlineHtml(markdown);
+
+    protected override async Task OnInitializedAsync() =>
+        _courses = await StudyScopeService.GetAllAsync();
+
+    private static bool OpenByDefault(ScopeGroup group) => group.Title == "Stages";
+
+    private bool IsOpen(string key, ScopeGroup group) =>
+        _toggled.Contains(key) ? !OpenByDefault(group) : OpenByDefault(group);
+
+    private void Toggle(string key, ScopeGroup group)
+    {
+        if (!_toggled.Add(key))
+            _toggled.Remove(key);
+    }
+
+    private static string Url(ReviewScope scope, bool practise)
+    {
+        var path = scope.Kind switch
+        {
+            ReviewScopeKind.Deck => $"review/deck/{scope.Id}",
+            ReviewScopeKind.Unit => $"review/unit/{scope.Id}",
+            ReviewScopeKind.Topic => $"review/topic/{scope.Id}",
+            ReviewScopeKind.Stage => $"review/stage/{scope.CourseId}/{scope.Stage}",
+            ReviewScopeKind.Course => $"review/course/{scope.Id}",
+            _ => "review",
+        };
+        return practise ? $"{path}?all=true" : path;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender)
+        {
+            try
+            {
+                _mathJs = await JS.InvokeAsync<IJSObjectReference>("import", "/js/mathRender.js");
+            }
+            catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+            {
+                return;
+            }
+        }
+
+        if (_mathJs is null || _courses is null)
+            return;
+
+        try
+        {
+            await _mathJs.InvokeVoidAsync("renderMath", _pageRef);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+        {
+            // Expanding a group re-renders while a call is in flight; the element reference can go
+            // stale. Must not bubble — an unhandled exception here kills the circuit, not just this
+            // render.
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        try
+        {
+            if (_mathJs is not null)
+                await _mathJs.DisposeAsync();
+        }
+        catch (JSDisconnectedException)
+        {
+        }
+    }
+}
