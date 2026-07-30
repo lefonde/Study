@@ -220,6 +220,22 @@ Map tab's **Path** view lays them out in stages — a topic sits one stage after
 it needs — and draws the dependencies between them. **List** is the same topics in one column
 with their settings, and the better view on a phone.
 
+Within a stage, cards are ordered to keep the connectors untangled rather than by importance, and
+rows line up across stages so a link between neighbours is a short horizontal line. On a
+39-topic course that takes crossings from 69 to 29. A link that skips a stage is routed through a
+reserved lane, so it never disappears behind the cards in between.
+
+Four controls sit above it, because a forty-topic course needs all of them:
+
+- **Hover any card** to light up its own links and dim the rest; click to pin it so you can read.
+  This is the fastest way to answer "where does this arrow go".
+- **◎ Isolate** — click a topic to narrow the map to it, everything it rests on and everything it
+  unlocks. Turns 39 topics into the 7 that matter for one thing, re-laid-out as its own path.
+- **Compact / Comfortable / Spacious** and **zoom** — the page itself only leaves the graph about
+  1090px, so trading text size for stages on screen is sometimes the right call. Compact at 90%
+  fits a 6-stage course with no scrolling at all.
+- **⛶ Expand** — full window, no sidebar, no page padding. Escape closes it.
+
 **🧭 Work out the learning path** is a separate run from mapping, and on an existing course it is
 the one you need. Mapping is a *revision*: shown a settled map and no new evidence, it correctly
 proposes nothing, so re-mapping will never retrofit a path onto topics that already exist — it

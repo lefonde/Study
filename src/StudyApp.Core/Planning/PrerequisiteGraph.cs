@@ -9,16 +9,35 @@ public record TopicEdge(Guid TopicId, Guid PrerequisiteId);
 public record TopicStage(int Index, IReadOnlyList<CourseTopic> Topics);
 
 /// <summary>
+/// A cell held open in a stage that an edge only passes over, so a long link can be drawn through
+/// empty space instead of behind the cards in between.
+///
+/// The renderer has to place something at every lane: a CSS grid does not create a row nothing is
+/// placed in, so without a placeholder the reservation would exist only in the row numbering and
+/// the bands would silently shift.
+/// </summary>
+public record EdgeLane(Guid TopicId, Guid PrerequisiteId, int Stage, int Row);
+
+/// <summary>
 /// The course laid out as an order you can follow, plus the edges that produced it.
 /// <paramref name="Edges"/> is the visible edge set — dismissed topics have already been spliced
 /// out — so a renderer can draw exactly what it is given without re-deriving anything.
+///
+/// <paramref name="RowByTopic"/> is the other half of the layout, and the renderer must honour it:
+/// a row is the same vertical band in <i>every</i> stage, which is what makes a link between two
+/// stages a short horizontal line rather than a long diagonal. Rows a stage leaves empty are
+/// usually lanes held open for an edge passing over that stage.
 /// </summary>
 public record ProgressionMap(
     IReadOnlyList<TopicStage> Stages,
     IReadOnlyList<TopicEdge> Edges,
-    IReadOnlyDictionary<Guid, int> StageByTopic)
+    IReadOnlyDictionary<Guid, int> StageByTopic,
+    IReadOnlyDictionary<Guid, int> RowByTopic,
+    int RowCount,
+    IReadOnlyList<EdgeLane> Lanes)
 {
-    public static ProgressionMap Empty { get; } = new([], [], new Dictionary<Guid, int>());
+    public static ProgressionMap Empty { get; } =
+        new([], [], new Dictionary<Guid, int>(), new Dictionary<Guid, int>(), 0, []);
 
     /// <summary>True when nothing depends on anything — the map is a flat list, not a path.</summary>
     public bool HasAnyEdges => Edges.Count > 0;
@@ -78,17 +97,55 @@ public static class PrerequisiteGraph
 
         var stageByTopic = depths.ToDictionary(kv => kv.Key, kv => compacted[kv.Value]);
 
-        var stages = stageByTopic
-            .GroupBy(kv => kv.Value)
-            .OrderBy(g => g.Key)
-            .Select(g => new TopicStage(
-                g.Key,
-                [.. g.Select(kv => visible[kv.Key])
-                     .OrderByDescending(t => t.Importance)
-                     .ThenBy(t => t.Name, StringComparer.CurrentCultureIgnoreCase)]))
+        // Ordering within a stage, and the row each topic occupies. Deliberately not importance
+        // order any more: position has to answer to the edges, or the drawn path cannot be
+        // followed however much room the page has. See LayeredLayout.
+        var layout = LayeredLayout.Arrange(visible, live, stageByTopic);
+
+        var stages = Enumerable.Range(0, stageByTopic.Values.DefaultIfEmpty(-1).Max() + 1)
+            .Select(index => new TopicStage(
+                index,
+                layout.TopicsByStage.GetValueOrDefault(index, [])))
             .ToList();
 
-        return new ProgressionMap(stages, live, stageByTopic);
+        return new ProgressionMap(
+            stages, live, stageByTopic, layout.RowByTopic, layout.RowCount, layout.Lanes);
+    }
+
+    /// <summary>
+    /// How many drawn links cross each other in this layout. Public so the quality of the layout
+    /// can be asserted as a number rather than judged by eye — the whole point of the ordering
+    /// work is to drive this down.
+    /// </summary>
+    public static int CountCrossings(ProgressionMap map)
+    {
+        var placed = map.Edges
+            .Where(e => map.RowByTopic.ContainsKey(e.TopicId)
+                        && map.RowByTopic.ContainsKey(e.PrerequisiteId))
+            .Select(e => (
+                FromStage: map.StageByTopic[e.PrerequisiteId],
+                FromRow: map.RowByTopic[e.PrerequisiteId],
+                ToStage: map.StageByTopic[e.TopicId],
+                ToRow: map.RowByTopic[e.TopicId]))
+            .ToList();
+
+        var total = 0;
+        for (var a = 0; a < placed.Count; a++)
+            for (var b = a + 1; b < placed.Count; b++)
+            {
+                var (fs1, fr1, ts1, tr1) = placed[a];
+                var (fs2, fr2, ts2, tr2) = placed[b];
+
+                // Only links running between the same pair of stages can be compared this way;
+                // anything else is a different span and its crossings are a routing question.
+                if (fs1 != fs2 || ts1 != ts2)
+                    continue;
+
+                if ((fr1 - fr2) * (tr1 - tr2) < 0)
+                    total++;
+            }
+
+        return total;
     }
 
     /// <summary>
@@ -129,6 +186,34 @@ public static class PrerequisiteGraph
 
             foreach (var parent in parents.Where(p => !seedSet.Contains(p) && found.Add(p)))
                 queue.Enqueue(parent);
+        }
+
+        return [.. found];
+    }
+
+    /// <summary>
+    /// Everything that rests on the given topics, transitively, excluding the seeds themselves.
+    ///
+    /// The mirror of <see cref="Ancestors"/>. Together they give the full neighbourhood of a topic,
+    /// which is what isolate mode narrows the map to.
+    /// </summary>
+    public static IReadOnlyList<Guid> Descendants(IEnumerable<TopicEdge> edges, IEnumerable<Guid> seeds)
+    {
+        var dependentsOf = edges
+            .GroupBy(e => e.PrerequisiteId)
+            .ToDictionary(g => g.Key, g => g.Select(e => e.TopicId).ToList());
+
+        var seedSet = seeds.ToHashSet();
+        var found = new HashSet<Guid>();
+        var queue = new Queue<Guid>(seedSet);
+
+        while (queue.Count > 0)
+        {
+            if (!dependentsOf.TryGetValue(queue.Dequeue(), out var children))
+                continue;
+
+            foreach (var child in children.Where(c => !seedSet.Contains(c) && found.Add(c)))
+                queue.Enqueue(child);
         }
 
         return [.. found];

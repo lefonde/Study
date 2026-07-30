@@ -80,55 +80,102 @@
 }
 
 /* --- the progression map ---
-   Stages as columns, left to right. Deliberately scrolls horizontally rather than stacking on a
-   narrow screen: stacked columns would put the connector lines' endpoints at opposite edges of
-   the viewport, and a line looping the long way round the card is worse than a scrollbar. The
-   List view is the real answer for a small screen. */
+
+   ONE grid for the whole graph, not a row of independent columns. That is the load-bearing
+   decision: because every card is placed in the same grid, row N is the same vertical band in
+   every stage, so a link between neighbouring stages is drawn as a short horizontal line. When
+   each column packed itself from the top, the same link was a long diagonal, and forty of those
+   crossing each other is what made the map unreadable.
+
+   Sizes are in em, never rem, so zoom is one property: set font-size on the container and the
+   columns, gaps, padding and text all scale together — and because the connectors are measured
+   from the real DOM afterwards, they follow for free. A transform would not do this; it would
+   scale the pixels but leave the scroll area the original size. */
+.graph-shell {
+    /* Belt and braces with main's min-width: the graph must never widen the page. */
+    min-width: 0;
+    max-width: 100%;
+}
+
 .topic-graph {
     position: relative;
-    display: flex;
-    align-items: flex-start;
-    gap: 3rem;
-    overflow-x: auto;
-    padding: 0.5rem 0 1rem;
+    display: grid;
+    max-width: 100%;
+    /* min-content rows, so a row holding only a reserved lane collapses to a hairline. */
+    grid-auto-rows: minmax(0, min-content);
+    /* Centres every card in its row band, which is what actually makes the link horizontal when
+       two cards in the same row have different heights. */
+    align-items: center;
+    justify-content: start;
+    grid-template-columns:
+        repeat(var(--graph-stages, 1), minmax(var(--graph-col-min), var(--graph-col-max)));
+    column-gap: var(--graph-col-gap);
+    row-gap: var(--graph-row-gap);
+    overflow: auto;
+    padding: 0.5em 0 1em;
+    font-size: calc(1rem * var(--graph-zoom, 1));
     /* The lines are stroked with currentColor, so this sets them. */
     color: var(--bs-secondary-color, #6c757d);
+
+    --graph-col-min: 11em;
+    --graph-col-max: 15em;
+    --graph-col-gap: 4em;
+    --graph-row-gap: 0.75em;
+}
+
+.topic-graph.spacing-compact {
+    --graph-col-min: 9em;
+    --graph-col-max: 12em;
+    --graph-col-gap: 2.5em;
+    --graph-row-gap: 0.5em;
+}
+
+.topic-graph.spacing-spacious {
+    --graph-col-min: 13em;
+    --graph-col-max: 19em;
+    --graph-col-gap: 7em;
+    --graph-row-gap: 1.25em;
 }
 
 .graph-edges {
     position: absolute;
-    inset: 0;
+    /* Sized by the script to the scroll content, not the visible box — see graphEdges.js. */
+    top: 0;
+    left: 0;
     /* Behind the cards, and never swallowing a click meant for one. */
     z-index: 0;
     pointer-events: none;
 }
 
-.graph-stage {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-    min-width: 11rem;
-    max-width: 14rem;
-}
-
 .graph-stage-label {
-    font-size: 0.7rem;
+    font-size: 0.7em;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--bs-secondary-color, #6c757d);
+    align-self: end;
 }
 
 .graph-node {
+    position: relative;
+    z-index: 1;
     border: 1px solid var(--bs-border-color, #dee2e6);
-    border-radius: 0.5rem;
-    padding: 0.5rem 0.6rem;
+    border-radius: 0.5em;
+    padding: 0.5em 0.6em;
     background: var(--bs-body-bg, #fff);
+    cursor: default;
+    transition: opacity 0.12s ease-out;
 }
 
 .graph-node.uncovered {
     border-style: dashed;
+}
+
+/* A reserved lane: a link passing over this stage is drawn through here rather than behind the
+   cards. It must exist in the DOM — a CSS grid does not create a row nothing is placed in, so
+   without it the band would collapse and every row below would shift. */
+.graph-lane {
+    height: 1px;
+    z-index: 0;
 }
 
 /* Selection states: what the chosen assignment tests, what it rests on, and what it ignores. */
@@ -145,10 +192,29 @@
     opacity: 0.35;
 }
 
+/* Focus: hovering or pinning one card pulls everything unrelated right back, which is the fastest
+   way to answer "where does this arrow go" however dense the graph is. Driven from JS by class,
+   not from Blazor — a SignalR round-trip per pointer move would lag visibly. */
+.topic-graph.has-focus .graph-node {
+    opacity: 0.25;
+}
+
+.topic-graph.has-focus .graph-node.focus-self,
+.topic-graph.has-focus .graph-node.focus-near {
+    opacity: 1;
+}
+
+.graph-node.focus-self {
+    border-color: #0d6efd;
+    box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.25);
+}
+
 .graph-milestone {
+    position: relative;
+    z-index: 1;
     border: 1px solid #0d6efd;
-    border-radius: 0.5rem;
-    padding: 0.4rem 0.6rem;
+    border-radius: 0.5em;
+    padding: 0.4em 0.6em;
     background: var(--bs-tertiary-bg, #f8f9fa);
     cursor: pointer;
 }
@@ -163,4 +229,35 @@
 .graph-node ::deep p:last-child,
 .graph-milestone ::deep p:last-child {
     margin-bottom: 0;
+}
+
+/* Fullscreen. The graph is capped at roughly 1090px inside the page — 250px of sidebar plus the
+   article padding — which no amount of spacing can fix for a forty-topic course. This escapes
+   both. */
+.graph-shell.fullscreen {
+    position: fixed;
+    inset: 0;
+    z-index: 1055;
+    display: flex;
+    flex-direction: column;
+    padding: 0.75rem 1rem;
+    background: var(--bs-body-bg, #fff);
+}
+
+.graph-shell.fullscreen .topic-graph {
+    flex: 1;
+    /* Without this the grid refuses to shrink below its content and the scrollbar never appears. */
+    min-height: 0;
+}
+
+/* Narrow screens keep the horizontal scroll — stacking the columns would put a link's two ends at
+   opposite edges of the viewport, and a line looping round the outside of a card is worse than a
+   scrollbar. The List view is the real answer on a phone; this just makes the graph survive. */
+@media (max-width: 640px) {
+    .topic-graph {
+        --graph-zoom: 0.85;
+        --graph-col-min: 9em;
+        --graph-col-max: 11em;
+        --graph-col-gap: 2.5em;
+    }
 }

@@ -6,6 +6,11 @@
 
 main {
     flex: 1;
+    /* A flex item defaults to min-width: auto, meaning it refuses to shrink below its content's
+       minimum. One wide child — the progression map's grid, whose columns have a definite minimum —
+       therefore pushed the whole page sideways and put a scrollbar under the sidebar. Zero lets the
+       item shrink so a child that declares overflow: auto scrolls itself instead. */
+    min-width: 0;
 }
 
 .sidebar {

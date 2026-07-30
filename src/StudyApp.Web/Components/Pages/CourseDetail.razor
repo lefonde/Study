@@ -12,6 +12,7 @@
 @inject SubmissionReviewService SubmissionReviewService
 @inject StudyPlanService StudyPlanService
 @using StudyApp.Core.Planning
+@using System.Globalization
 @inject SuggestionService SuggestionService
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -1044,20 +1045,72 @@ else
                     </div>
                 }
 
-                @* dir="ltr": stages always flow left to right whatever the course's language, or
-                   the drawn geometry stops matching the reading order. Individual names keep
-                   dir="auto" so Hebrew still lays out correctly inside its card. *@
-                <div class="topic-graph mb-3" dir="ltr" @ref="_graphRef">
-                    <svg class="graph-edges" data-edges xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
-                    @foreach (var stage in _progression.Stages)
+                @* Controls first: room, density and focus are the three levers on a dense map. *@
+                <div class="d-flex align-items-center gap-2 flex-wrap mb-2 small">
+                    <span class="btn-group btn-group-sm" role="group" aria-label="Card spacing">
+                        @foreach (var (value, label) in new[] { ("compact", "Compact"), ("", "Comfortable"), ("spacious", "Spacious") })
+                        {
+                            <button class="btn @(_graphSpacing == value ? "btn-secondary" : "btn-outline-secondary")"
+                                    @onclick="() => _graphSpacing = value">@label</button>
+                        }
+                    </span>
+                    <span class="btn-group btn-group-sm" role="group" aria-label="Zoom">
+                        <button class="btn btn-outline-secondary" title="Zoom out"
+                                disabled="@(_graphZoom <= MinGraphZoom)" @onclick="() => AdjustZoom(-1)">−</button>
+                        <button class="btn btn-outline-secondary" title="Reset zoom" @onclick="() => _graphZoom = 1.0">
+                            @Pct(_graphZoom)
+                        </button>
+                        <button class="btn btn-outline-secondary" title="Zoom in"
+                                disabled="@(_graphZoom >= MaxGraphZoom)" @onclick="() => AdjustZoom(1)">+</button>
+                    </span>
+                    <button class="btn btn-sm @(_isolateMode ? "btn-primary" : "btn-outline-primary")"
+                            title="Click a topic to show only it, what it rests on, and what it unlocks"
+                            @onclick="ToggleIsolateAsync">◎ Isolate</button>
+                    @if (_isolatedTopicId is { } isolated)
                     {
-                        <div class="graph-stage">
-                            <div class="graph-stage-label">Stage @(stage.Index + 1)</div>
+                        <span class="text-muted">
+                            showing <span class="md-content" dir="auto">@MdInline(TopicName(isolated))</span>
+                            <button class="btn btn-link btn-sm p-0 ms-1 align-baseline" @onclick="ClearIsolateAsync">show all</button>
+                        </span>
+                    }
+                    <button class="btn btn-sm btn-outline-secondary ms-auto"
+                            title="@(_graphFullscreen ? "Back to the page" : "Use the whole window — inside the page the graph only gets about 1090px")"
+                            @onclick="() => _graphFullscreen = !_graphFullscreen">
+                        @(_graphFullscreen ? "✕ Close" : "⛶ Expand")
+                    </button>
+                </div>
+
+                @* dir="ltr": stages always flow left to right whatever the course's language, or the
+                   drawn geometry stops matching the reading order. Individual names keep dir="auto"
+                   so Hebrew still lays out correctly inside its card.
+
+                   Every card is a direct child of ONE grid, placed by stage and row, because that is
+                   what makes a row the same vertical band in every stage — see the CSS. *@
+                @* tabindex and the keydown handler exist only so Escape leaves fullscreen. The
+                   element is focused on entering it, which is also the right thing for a keyboard
+                   user landing in a view that covers the whole page. *@
+                <div class="graph-shell @(_graphFullscreen ? "fullscreen" : "")"
+                     @ref="_graphShellRef" tabindex="-1" @onkeydown="OnGraphKeyDown">
+                    <div class="topic-graph mb-3 @(_graphSpacing.Length > 0 ? $"spacing-{_graphSpacing}" : "")"
+                         dir="ltr" @ref="_graphRef" style="@GraphStyle">
+                        <svg class="graph-edges" data-edges xmlns="http://www.w3.org/2000/svg" aria-hidden="true"></svg>
+
+                        @foreach (var stage in _progression.Stages)
+                        {
+                            <div class="graph-stage-label" style="grid-column: @(stage.Index + 1); grid-row: 1;">
+                                Stage @(stage.Index + 1)
+                            </div>
+                        }
+
+                        @foreach (var stage in _progression.Stages)
+                        {
                             @foreach (var topic in stage.Topics)
                             {
                                 <div class="graph-node @NodeStateClass(topic)"
+                                     style="grid-column: @(stage.Index + 1); grid-row: @(_progression.RowByTopic.GetValueOrDefault(topic.Id) + 2);"
                                      data-topic="@topic.Id"
-                                     data-requires="@RequiresAttribute(topic)">
+                                     data-requires="@RequiresAttribute(topic)"
+                                     @onclick="() => OnTopicClickAsync(topic.Id)">
                                     <div class="d-flex align-items-start gap-1">
                                         <span class="badge @ImportanceBadge(topic.Importance)">@topic.Importance.ToString()[..1]</span>
                                         <span class="fw-semibold small md-content" dir="auto">@MdInline(topic.Name)</span>
@@ -1074,9 +1127,26 @@ else
                                     </div>
                                 </div>
                             }
-                            @foreach (var milestone in MilestonesAfterStage(stage.Index))
+                        }
+
+                        @* Reserved lanes, rendered rather than merely counted: a CSS grid does not
+                           create a row nothing is placed in, so without these the band would
+                           collapse and every card below it would shift. *@
+                        @foreach (var lane in _progression.Lanes)
+                        {
+                            <div class="graph-lane"
+                                 style="grid-column: @(lane.Stage + 1); grid-row: @(lane.Row + 2);"
+                                 data-lane="@LaneKey(lane)" aria-hidden="true"></div>
+                        }
+
+                        @* Deadlines get a band of their own below the last topic row, so a long
+                           assignment card can no longer stretch a stage and drag its cards around. *@
+                        @foreach (var stage in _progression.Stages)
+                        {
+                            @foreach (var (milestone, offset) in MilestonesAfterStage(stage.Index).Select((m, i) => (m, i)))
                             {
                                 <div class="graph-milestone @(_selectedAssignmentId == milestone.Id ? "selected" : "")"
+                                     style="grid-column: @(stage.Index + 1); grid-row: @(_progression.RowCount + 2 + offset);"
                                      @onclick="() => _selectedAssignmentId = _selectedAssignmentId == milestone.Id ? null : milestone.Id">
                                     <div class="fw-semibold small md-content" dir="auto">📝 @MdInline(milestone.Title)</div>
                                     <div class="small">
@@ -1095,8 +1165,8 @@ else
                                     </div>
                                 </div>
                             }
-                        </div>
-                    }
+                        }
+                    </div>
                 </div>
             }
             else
@@ -1420,6 +1490,36 @@ else
     private ElementReference _graphRef;
     private IJSObjectReference? _graphJs;
 
+    // --- graph view controls ---
+    private const double MinGraphZoom = 0.6;
+    private const double MaxGraphZoom = 1.4;
+
+    /// <summary>"" is comfortable; the other two map to a CSS class.</summary>
+    private string _graphSpacing = "";
+    private double _graphZoom = 1.0;
+    private bool _graphFullscreen;
+    private bool _isolateMode;
+    private Guid? _isolatedTopicId;
+
+    private string GraphStyle =>
+        $"--graph-stages: {_progression.Stages.Count}; " +
+        $"--graph-zoom: {_graphZoom.ToString("0.##", CultureInfo.InvariantCulture)}";
+
+    /// <summary>Matches the key the drawing script builds from an edge, so a lane can be found.</summary>
+    private static string LaneKey(EdgeLane lane) => $"{lane.PrerequisiteId}>{lane.TopicId}";
+
+    private ElementReference _graphShellRef;
+    private bool _graphWasFullscreen;
+
+    private void OnGraphKeyDown(KeyboardEventArgs e)
+    {
+        if (_graphFullscreen && e.Key == "Escape")
+            _graphFullscreen = false;
+    }
+
+    private void AdjustZoom(int steps) =>
+        _graphZoom = Math.Clamp(Math.Round(_graphZoom + steps * 0.1, 2), MinGraphZoom, MaxGraphZoom);
+
     private Dictionary<Guid, StudyPlan> _assignmentPlans = [];
     private Guid? _expandedPlanId;
 
@@ -1526,6 +1626,11 @@ else
             {
                 _graphJs ??= await JS.InvokeAsync<IJSObjectReference>("import", "/js/graphEdges.js");
                 await _graphJs.InvokeVoidAsync("drawEdges", _graphRef);
+
+                // Focus on the way in only, so Escape works without stealing focus on every render.
+                if (_graphFullscreen && !_graphWasFullscreen)
+                    await _graphShellRef.FocusAsync();
+                _graphWasFullscreen = _graphFullscreen;
             }
             catch (Exception ex) when (ex is JSDisconnectedException or JSException)
             {
@@ -1598,10 +1703,7 @@ else
         _unmappedMaterialCount = _materials.Count(m => m.Status != MaterialStatus.Ingested);
 
         // The learning path, derived from edges already loaded with the topics — no extra query.
-        _progression = PrerequisiteGraph.Build(
-            _topics,
-            _topics.SelectMany(t => t.Prerequisites)
-                   .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId)));
+        RebuildProgression();
 
         (_perTopicCoverage, _coverage) = await CoverageService.GetCoverageAsync(Id);
         _gaps = [.. CoveragePolicy.Gaps(_perTopicCoverage)];
@@ -2073,6 +2175,79 @@ else
     // --- the progression map ---
 
     private int TopicsWithoutPrerequisites => _topics.Count(t => t.Prerequisites.Count == 0);
+
+    /// <summary>
+    /// Lays the path out from whatever is currently in scope — every topic, or just the
+    /// neighbourhood of one when isolate mode is on. Isolating re-runs the whole layout rather than
+    /// hiding cards, so the subgraph gets stages and rows of its own and reads as cleanly as a
+    /// small course would.
+    /// </summary>
+    private void RebuildProgression()
+    {
+        var edges = _topics
+            .SelectMany(t => t.Prerequisites)
+            .Select(p => new TopicEdge(p.CourseTopicId, p.PrerequisiteTopicId))
+            .ToList();
+
+        if (_isolatedTopicId is not { } focus || _topics.All(t => t.Id != focus))
+        {
+            _progression = PrerequisiteGraph.Build(_topics, edges);
+            return;
+        }
+
+        var keep = new HashSet<Guid>([focus]);
+        keep.UnionWith(PrerequisiteGraph.Ancestors(edges, [focus]));
+        keep.UnionWith(PrerequisiteGraph.Descendants(edges, [focus]));
+
+        _progression = PrerequisiteGraph.Build(
+            _topics.Where(t => keep.Contains(t.Id)),
+            edges.Where(e => keep.Contains(e.TopicId) && keep.Contains(e.PrerequisiteId)));
+    }
+
+    private async Task OnTopicClickAsync(Guid topicId)
+    {
+        if (!_isolateMode)
+            return;
+
+        _isolatedTopicId = _isolatedTopicId == topicId ? null : topicId;
+        RebuildProgression();
+        await ResetGraphFocusAsync();
+    }
+
+    private async Task ToggleIsolateAsync()
+    {
+        _isolateMode = !_isolateMode;
+        if (!_isolateMode)
+            _isolatedTopicId = null;
+        RebuildProgression();
+        await ResetGraphFocusAsync();
+    }
+
+    private async Task ClearIsolateAsync()
+    {
+        _isolatedTopicId = null;
+        RebuildProgression();
+        await ResetGraphFocusAsync();
+    }
+
+    /// <summary>
+    /// Hover highlighting is held in the DOM by the drawing script, so a re-render that replaces the
+    /// cards must clear it — otherwise a stale "focused" class survives on a card the pointer left.
+    /// </summary>
+    private async Task ResetGraphFocusAsync()
+    {
+        if (_graphJs is null)
+            return;
+
+        try
+        {
+            await _graphJs.InvokeVoidAsync("clearFocus", _graphRef);
+        }
+        catch (Exception ex) when (ex is JSDisconnectedException or JSException)
+        {
+            // The element is already gone; there is nothing left to clear.
+        }
+    }
 
     private IEnumerable<Material> UpcomingAssignments =>
         _materials.Where(m => m.DueDate is not null && m.SubmittedAt is null)
